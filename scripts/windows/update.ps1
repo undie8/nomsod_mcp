@@ -107,6 +107,31 @@ try {
       throw "Nomsod MCP installer failed after update."
     }
 
+    function Restart-NomsodTask {
+      param([string]$TaskName)
+
+      & schtasks.exe /End /TN $TaskName 1>$null 2>$null
+
+      $deadline = [DateTime]::UtcNow.AddSeconds(20)
+      while ([DateTime]::UtcNow -lt $deadline) {
+        $query = (& schtasks.exe /Query /TN $TaskName /V /FO LIST 2>$null | Out-String)
+        if ($query -notmatch '(?m)^Status:\s+Running\s*$') { break }
+        Start-Sleep -Milliseconds 250
+      }
+
+      & schtasks.exe /Run /TN $TaskName 1>$null
+      if ($LASTEXITCODE -ne 0) {
+        throw "Failed to restart scheduled task $TaskName after update."
+      }
+    }
+
+    if ($role -in @("Agent", "Both")) {
+      Restart-NomsodTask "NomsodMCP-Agent"
+    }
+    if ($role -in @("Supervisor", "Both")) {
+      Restart-NomsodTask "NomsodMCP-Supervisor"
+    }
+
     Add-Content -Encoding UTF8 -Path $log -Value ("[{0}] update complete version={1}" -f [DateTime]::UtcNow.ToString("o"), $manifest.version)
   } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

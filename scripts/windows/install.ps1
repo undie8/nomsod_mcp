@@ -12,21 +12,45 @@ $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 $portableNode = Join-Path $Root ".runtime\node\node.exe"
 $portableNpm = Join-Path $Root ".runtime\node\npm.cmd"
 
-if (-not (Test-Path $portableNode) -or -not (Test-Path $portableNpm)) {
-  if ($DryRun) {
-    $Node = (Get-Command node -ErrorAction Stop).Source
-    $Npm = (Get-Command npm -ErrorAction Stop).Source
+function Get-CompatibleSystemNode {
+  $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+  $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+  if (-not $nodeCommand -or -not $npmCommand) { return $null }
+
+  try {
+    $versionText = (& $nodeCommand.Source --version).Trim().TrimStart("v")
+    $version = [Version]$versionText
+    if ($version.Major -lt 24) { return $null }
+  } catch {
+    return $null
+  }
+
+  return @{
+    Node = $nodeCommand.Source
+    Npm = $npmCommand.Source
+    Version = $versionText
+  }
+}
+
+if ((Test-Path $portableNode) -and (Test-Path $portableNpm)) {
+  $Node = $portableNode
+  $Npm = $portableNpm
+} else {
+  $systemRuntime = Get-CompatibleSystemNode
+
+  if ($systemRuntime) {
+    $Node = $systemRuntime.Node
+    $Npm = $systemRuntime.Npm
+    Write-Host "Using compatible system Node.js v$($systemRuntime.Version)"
+  } elseif ($DryRun) {
+    throw "Dry-run requires Node.js 24+ in PATH when the portable runtime is not installed."
   } else {
     & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\windows\ensure-node.ps1") -Root $Root | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Portable Node installation failed" }
     $Node = $portableNode
     $Npm = $portableNpm
   }
-} else {
-  $Node = $portableNode
-  $Npm = $portableNpm
 }
-
 $CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $CurrentSid = $CurrentIdentity.User.Value
 $Quote = [char]34

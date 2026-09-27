@@ -32,7 +32,7 @@ export async function saveIdentity(identity: StoredIdentity): Promise<void> {
   try { await fs.chmod(file, 0o600); } catch {}
 }
 
-export function buildDescriptor(deviceId: string): DeviceDescriptor {
+export function buildDescriptor(deviceId: string, version: string): DeviceDescriptor {
   const hostname = os.hostname();
   const displayName = (process.env.NOMSOD_DEVICE_NAME || hostname).trim() || hostname;
   return {
@@ -41,7 +41,7 @@ export function buildDescriptor(deviceId: string): DeviceDescriptor {
     hostname,
     platform: process.platform,
     arch: process.arch,
-    version: "0.1.0",
+    version,
     capabilities: [
       "system.info",
       "fs.list",

@@ -1,9 +1,11 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { getNomsodVersion } from "../shared/version.js";
 import { executeAction } from "./actions.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.NOMSOD_AGENT_WORKER_PORT || 3230);
+const version = getNomsodVersion(process.cwd());
 
 async function readJsonBody(req: http.IncomingMessage, maxBytes = 8 * 1024 * 1024): Promise<any> {
   const chunks: Buffer[] = [];
@@ -35,7 +37,7 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       ok: true,
       service: "nomsod-agent-worker",
-      version: "0.1.0",
+      version,
       pid: process.pid
     });
     return;

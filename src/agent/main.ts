@@ -165,7 +165,7 @@ async function run(): Promise<void> {
   await startHealthServer();
 
   const identity = await loadIdentity();
-  const descriptor = buildDescriptor(identity.deviceId);
+  const descriptor = buildDescriptor(identity.deviceId, version);
 
   console.log(
     `[agent-guardian] device=${descriptor.displayName} id=${descriptor.deviceId} platform=${descriptor.platform}`

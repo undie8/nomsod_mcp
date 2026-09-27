@@ -1,5 +1,6 @@
 import { McpServer, createMcpHandler, requireScopes } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { getNomsodVersion } from "../shared/version.js";
 import type { ComputerHub } from "./hub-client.js";
 
 const oauthSecuritySchemes = [
@@ -51,9 +52,11 @@ function textResult(value: unknown) {
 }
 
 export function createNomsodMcpHandler(hub: ComputerHub) {
+  const version = getNomsodVersion(process.cwd());
+
   return createMcpHandler(() => {
     const server = new McpServer(
-      { name: "nomsod-mcp", version: "0.1.0" },
+      { name: "nomsod-mcp", version },
       {
         capabilities: { tools: {} },
         instructions:
