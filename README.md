@@ -137,6 +137,9 @@ Agents connect outbound and use:
 - exponential reconnect backoff
 - persistent device identity
 - a persistent per-device token after initial pairing
+- DNS fallback to configurable `NOMSOD_DNS_SERVERS` when the OS resolver temporarily returns `ENOTFOUND` or `EAI_AGAIN`
+
+System DNS remains the first choice. The fallback applies only to Agent-to-Gateway connection setup so stale negative DNS caching does not keep a device offline after a new MCP hostname is created.
 
 If the public Gateway/network disappears temporarily, the Agent Guardian remains alive and reconnects automatically.
 

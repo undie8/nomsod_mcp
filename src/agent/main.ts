@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import http from "node:http";
 import path from "node:path";
 import WebSocket from "ws";
@@ -15,11 +16,71 @@ const workerPorts: [number, number] = [
   Number(process.env.NOMSOD_AGENT_WORKER_PORT_B || 3231)
 ];
 const healthPort = Number(process.env.NOMSOD_AGENT_GUARDIAN_HEALTH_PORT || 3232);
+const dnsServers = (process.env.NOMSOD_DNS_SERVERS || "1.1.1.1,8.8.8.8")
+  .split(",")
+  .map(value => value.trim())
+  .filter(Boolean);
+const fallbackResolver = new dns.promises.Resolver();
+fallbackResolver.setServers(dnsServers);
 
 let stopping = false;
 let reconnectAttempt = 0;
 let gatewayConnected = false;
 let healthServer: http.Server | undefined;
+
+function resilientLookup(
+  hostname: string,
+  options: any,
+  callback: (...args: any[]) => void
+): void {
+  dns.lookup(hostname, options, async (error: NodeJS.ErrnoException | null, address: any, family: any) => {
+    if (!error) {
+      if (options && typeof options === "object" && options.all === true) {
+        callback(null, address);
+      } else {
+        callback(null, address, family);
+      }
+      return;
+    }
+
+    if (!["ENOTFOUND", "EAI_AGAIN"].includes(error.code || "")) {
+      callback(error);
+      return;
+    }
+
+    try {
+      const [v4, v6] = await Promise.allSettled([
+        fallbackResolver.resolve4(hostname),
+        fallbackResolver.resolve6(hostname)
+      ]);
+
+      const addresses: Array<{ address: string; family: 4 | 6 }> = [];
+      if (v4.status === "fulfilled") {
+        addresses.push(...v4.value.map(address => ({ address, family: 4 as const })));
+      }
+      if (v6.status === "fulfilled") {
+        addresses.push(...v6.value.map(address => ({ address, family: 6 as const })));
+      }
+
+      if (addresses.length === 0) {
+        callback(error);
+        return;
+      }
+
+      console.warn(
+        `[agent-guardian] system DNS failed for ${hostname}; using fallback DNS ${dnsServers.join(",")}`
+      );
+
+      if (options && typeof options === "object" && options.all === true) {
+        callback(null, addresses);
+      } else {
+        callback(null, addresses[0].address, addresses[0].family);
+      }
+    } catch {
+      callback(error);
+    }
+  });
+}
 
 function backoffMs(attempt: number): number {
   const base = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
@@ -113,7 +174,8 @@ async function run(): Promise<void> {
 
     const ws = new WebSocket(gatewayUrl, {
       handshakeTimeout: 15_000,
-      perMessageDeflate: false
+      perMessageDeflate: false,
+      lookup: resilientLookup as any
     });
 
     let lastInbound = Date.now();
