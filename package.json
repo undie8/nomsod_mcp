@@ -1,0 +1,35 @@
+{
+  "name": "nomsod-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-platform multi-computer MCP gateway and agent for ChatGPT",
+  "scripts": {
+    "start": "tsx src/supervisor/main.ts",
+    "dev:supervisor": "tsx src/supervisor/main.ts",
+    "dev:runtime": "tsx src/gateway/main.ts",
+    "dev:agent": "tsx src/agent/main.ts",
+    "supervisor": "tsx src/supervisor/main.ts",
+    "runtime": "tsx src/gateway/main.ts",
+    "agent": "tsx src/agent/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.1.0",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.0",
+    "typescript": "^6.0.0",
+    "vitest": "^3.2.0",
+    "@modelcontextprotocol/client": "^2.1.0"
+  }
+}
