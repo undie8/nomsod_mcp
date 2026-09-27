@@ -98,7 +98,9 @@ export class AgentHub {
         let accepted = false;
         if (hello.deviceToken) {
           accepted = await this.registry.verify(device.deviceId, hello.deviceToken);
-        } else if (this.pairingToken && hello.pairingToken === this.pairingToken) {
+        }
+
+        if (!accepted && this.pairingToken && hello.pairingToken === this.pairingToken) {
           const token = await this.registry.pair(device);
           ws.send(JSON.stringify({ type: "paired", deviceId: device.deviceId, deviceToken: token }));
           accepted = true;

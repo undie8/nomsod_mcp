@@ -130,7 +130,7 @@ async function run(): Promise<void> {
     };
 
     ws.on("open", () => {
-      gatewayConnected = true;
+      gatewayConnected = false;
       reconnectAttempt = 0;
       lastInbound = Date.now();
 
@@ -138,7 +138,7 @@ async function run(): Promise<void> {
         type: "hello",
         device: descriptor,
         deviceToken: identity.deviceToken,
-        pairingToken: identity.deviceToken ? undefined : pairingToken
+        pairingToken: pairingToken || undefined
       });
 
       heartbeatTimer = setInterval(
@@ -174,6 +174,7 @@ async function run(): Promise<void> {
       }
 
       if (message.type === "ready") {
+        gatewayConnected = true;
         console.log("[agent-guardian] connected and ready");
         return;
       }
