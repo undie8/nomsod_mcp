@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         buildMenu()
         refreshStatus()
 
@@ -207,11 +207,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem.button {
             button.image = createStatusIcon(state)
-            button.imagePosition = .imageLeading
-            button.title = "v\(appVersion())"
+            button.imagePosition = .imageOnly
+            button.title = ""
             button.toolTip = connected
-                ? "Nomsod MCP v\(appVersion()) - Online"
-                : "Nomsod MCP v\(appVersion()) - Offline"
+                ? "Nomsod MCP - Online"
+                : "Nomsod MCP - Offline"
         }
 
         restartAgentItem.isEnabled = launchServiceExists("com.nomsod.mcp.agent", user: true)

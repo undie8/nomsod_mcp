@@ -8,10 +8,17 @@ if (-not $Root) {
 }
 
 $Source = Join-Path $PSScriptRoot "NomsodMcpControl.cs"
+$BackgroundSource = Join-Path $PSScriptRoot "NomsodMcpBackground.cs"
 $OutDir = Join-Path $Root "build\windows"
 $OutFile = Join-Path $OutDir "Nomsod MCP Control.exe"
+$Version = ([IO.File]::ReadAllText((Join-Path $Root "VERSION"))).Trim()
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+  throw "Invalid VERSION value: $Version"
+}
+$BackgroundOutDir = Join-Path $OutDir ("background\" + $Version)
+$BackgroundOutFile = Join-Path $BackgroundOutDir "Nomsod MCP Background.exe"
 $IconFile = Join-Path $Root "assets\nomsod-mcp-transparent.ico"
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+New-Item -ItemType Directory -Force -Path $OutDir,$BackgroundOutDir | Out-Null
 
 if (-not (Test-Path $IconFile)) {
   throw "Missing icon asset: $IconFile"
@@ -43,5 +50,22 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $OutFile)) {
   throw "Failed to build Nomsod MCP Control."
 }
 
+$backgroundArgs = @(
+  "/nologo",
+  "/target:winexe",
+  "/optimize+",
+  "/reference:System.dll",
+  "/reference:System.Core.dll",
+  "/win32icon:$IconFile",
+  "/out:$BackgroundOutFile",
+  $BackgroundSource
+)
+
+& $csc @backgroundArgs
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $BackgroundOutFile)) {
+  throw "Failed to build Nomsod MCP Background."
+}
+
 Write-Host "Built: $OutFile"
+Write-Host "Built: $BackgroundOutFile"
 Write-Host "Icon: $IconFile"

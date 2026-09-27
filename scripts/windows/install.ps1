@@ -169,12 +169,32 @@ if (-not $SkipConfigCheck) {
 }
 
 Set-Location $Root
+$releaseVersion = ([IO.File]::ReadAllText((Join-Path $Root "VERSION"))).Trim()
+if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') {
+  throw "Invalid VERSION value: $releaseVersion"
+}
+
 $runtimeDir = Join-Path $Root ".runtime"
-$supervisorNode = Join-Path $runtimeDir "Nomsod MCP Supervisor.exe"
-$gatewayNode = Join-Path $runtimeDir "Nomsod MCP Gateway.exe"
-$agentNode = Join-Path $runtimeDir "Nomsod MCP Agent.exe"
-$workerNode = Join-Path $runtimeDir "Nomsod MCP Worker.exe"
+$roleRuntimeDir = Join-Path $runtimeDir ("roles\" + $releaseVersion)
+$supervisorNode = Join-Path $roleRuntimeDir "Nomsod MCP Supervisor.exe"
+$gatewayNode = Join-Path $roleRuntimeDir "Nomsod MCP Gateway.exe"
+$agentNode = Join-Path $roleRuntimeDir "Nomsod MCP Agent.exe"
+$workerNode = Join-Path $roleRuntimeDir "Nomsod MCP Worker.exe"
 $controlExe = Join-Path $Root "build\windows\Nomsod MCP Control.exe"
+$backgroundExe = Join-Path $Root ("build\windows\background\" + $releaseVersion + "\Nomsod MCP Background.exe")
+
+function Set-WindowsGuiSubsystem {
+  param([string]$Path)
+  $bytes = [IO.File]::ReadAllBytes($Path)
+  $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+  $optionalOffset = $peOffset + 24
+  $subsystemOffset = $optionalOffset + 0x44
+  $subsystem = [BitConverter]::ToUInt16($bytes, $subsystemOffset)
+  if ($subsystem -eq 2) { return }
+  if ($subsystem -ne 3) { throw "Unexpected PE subsystem $subsystem in $Path" }
+  [BitConverter]::GetBytes([uint16]2).CopyTo($bytes, $subsystemOffset)
+  [IO.File]::WriteAllBytes($Path, $bytes)
+}
 
 if (-not $DryRun) {
   Write-Host "Installing dependencies..."
@@ -196,12 +216,13 @@ if (-not $DryRun) {
   & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\windows\build-control.ps1") -Root $Root
   if ($LASTEXITCODE -ne 0) { throw "Nomsod MCP Control build failed" }
 
-  New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+  New-Item -ItemType Directory -Force -Path $runtimeDir,$roleRuntimeDir | Out-Null
 
   foreach ($alias in @($supervisorNode, $gatewayNode, $agentNode, $workerNode)) {
     if (-not (Test-Path $alias)) {
       Copy-Item -LiteralPath $Node -Destination $alias -Force
     }
+    Set-WindowsGuiSubsystem $alias
   }
 
   function Set-DotEnvValue {
@@ -335,20 +356,17 @@ $updaterPrincipal = @"
 </Principal>
 "@
 
-$updaterArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
-  $Quote + $updaterScript + $Quote + " -Root " + $Quote + $Root + $Quote
+$updaterArgs = $Quote + $updaterScript + $Quote + " " + $Quote + $Root + $Quote
 
 $params = @{
   Description = "Nomsod MCP updater - checks release manifests every minute"
   TriggerXml = $updaterTrigger
   PrincipalXml = $updaterPrincipal
-  Command = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  Command = $backgroundExe
   Arguments = $updaterArgs
   WorkingDirectory = $Root
 }
-if ($env:NOMSOD_UPDATE_IN_PROGRESS -ne "1") {
-  Install-Task "NomsodMCP-Updater" (New-TaskXml @params)
-}
+Install-Task "NomsodMCP-Updater" (New-TaskXml @params)
 
 if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
   $watchdogScript = Join-Path $Root "scripts\windows\watchdog.ps1"
@@ -370,14 +388,13 @@ if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
 </Principal>
 "@
 
-  $watchdogArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
-    $Quote + $watchdogScript + $Quote + " -Root " + $Quote + $Root + $Quote
+  $watchdogArgs = $Quote + $watchdogScript + $Quote + " " + $Quote + $Root + $Quote
 
   $params = @{
     Description = "Nomsod MCP watchdog - restarts unhealthy Supervisor/Agent scheduled tasks"
     TriggerXml = $watchdogTrigger
     PrincipalXml = $systemPrincipal
-    Command = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    Command = $backgroundExe
     Arguments = $watchdogArgs
     WorkingDirectory = $Root
   }
@@ -416,3 +433,4 @@ Write-Host "Gateway process: $gatewayNode"
 Write-Host "Agent process: $agentNode"
 Write-Host "Worker process: $workerNode"
 Write-Host "Control process: $controlExe"
+Write-Host "Background helper: $backgroundExe"
