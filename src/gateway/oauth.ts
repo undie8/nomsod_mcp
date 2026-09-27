@@ -8,6 +8,7 @@ interface AuthCodeRecord {
   redirectUri: string;
   codeChallenge: string;
   scope: string;
+  resource: string;
   expiresAt: number;
 }
 
@@ -83,7 +84,11 @@ export class OAuthService {
     const auth = req.headers.authorization || "";
     const match = auth.match(/^Bearer\s+(.+)$/i);
     if (!match) return false;
-    return !!(await this.store.verifyAccessToken(match[1].trim()));
+    return !!(await this.store.verifyAccessToken(
+      match[1].trim(),
+      `${this.publicBase}/mcp`,
+      ["mcp"]
+    ));
   }
 
   async handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
@@ -108,7 +113,7 @@ export class OAuthService {
         scopes_supported: ["mcp", "offline_access"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
-        authorization_response_iss_parameter_supported: true
+        authorization_response_iss_parameter_supported: false
       });
       return true;
     }
@@ -149,6 +154,7 @@ export class OAuthService {
       const codeChallenge = url.searchParams.get("code_challenge") || "";
       const codeChallengeMethod = url.searchParams.get("code_challenge_method") || "";
       const scope = url.searchParams.get("scope") || "mcp offline_access";
+      const resource = url.searchParams.get("resource") || `${this.publicBase}/mcp`;
 
       const client = await this.store.getClient(clientId);
       if (!client || !client.redirectUris.includes(redirectUri)) {
@@ -157,6 +163,14 @@ export class OAuthService {
       }
       if (!codeChallenge || codeChallengeMethod !== "S256") {
         json(res, 400, { error: "invalid_request", error_description: "PKCE S256 is required" });
+        return true;
+      }
+      if (resource !== `${this.publicBase}/mcp`) {
+        json(res, 400, { error: "invalid_target", error_description: "Unknown OAuth resource" });
+        return true;
+      }
+      if (!scope.split(/\s+/).includes("mcp")) {
+        json(res, 400, { error: "invalid_scope", error_description: "The mcp scope is required" });
         return true;
       }
 
@@ -183,6 +197,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
 <input type="hidden" name="state" value="${htmlEscape(state)}">
 <input type="hidden" name="code_challenge" value="${htmlEscape(codeChallenge)}">
 <input type="hidden" name="scope" value="${htmlEscape(scope)}">
+<input type="hidden" name="resource" value="${htmlEscape(resource)}">
 <label>Owner key</label>
 <input type="password" name="owner_key" autocomplete="current-password" required autofocus>
 <button type="submit">Authorize ChatGPT</button>
@@ -204,6 +219,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       const state = params.get("state") || "";
       const codeChallenge = params.get("code_challenge") || "";
       const scope = params.get("scope") || "mcp offline_access";
+      const resource = params.get("resource") || `${this.publicBase}/mcp`;
 
       if (!this.ownerKey || !safeSecretEqual(ownerKey, this.ownerKey)) {
         res.writeHead(401, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -216,6 +232,10 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
         json(res, 400, { error: "invalid_request" });
         return true;
       }
+      if (resource !== `${this.publicBase}/mcp` || !scope.split(/\s+/).includes("mcp")) {
+        json(res, 400, { error: "invalid_target" });
+        return true;
+      }
 
       const code = "nmc_code_" + randomBytes(24).toString("base64url");
       this.authCodes.set(code, {
@@ -223,6 +243,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
         redirectUri,
         codeChallenge,
         scope,
+        resource,
         expiresAt: Date.now() + 5 * 60_000
       });
 
@@ -252,9 +273,19 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
 
       const grantType = params.get("grant_type") || "";
       const clientId = params.get("client_id") || "";
+      const resource = params.get("resource") || `${this.publicBase}/mcp`;
+
+      if (resource !== `${this.publicBase}/mcp`) {
+        json(res, 400, { error: "invalid_target" });
+        return true;
+      }
 
       if (grantType === "refresh_token") {
-        const rotated = await this.store.rotateRefreshToken(params.get("refresh_token") || "", clientId || undefined);
+        const rotated = await this.store.rotateRefreshToken(
+          params.get("refresh_token") || "",
+          clientId || undefined,
+          resource
+        );
         if (!rotated) {
           json(res, 400, { error: "invalid_grant" });
           return true;
@@ -284,7 +315,12 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
 
       const redirectUri = params.get("redirect_uri") || "";
       const verifier = params.get("code_verifier") || "";
-      if (record.clientId !== clientId || record.redirectUri !== redirectUri || !verifier) {
+      if (
+        record.clientId !== clientId ||
+        record.redirectUri !== redirectUri ||
+        record.resource !== resource ||
+        !verifier
+      ) {
         json(res, 400, { error: "invalid_grant" });
         return true;
       }
@@ -296,7 +332,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       }
 
       this.authCodes.delete(code);
-      const tokens = await this.store.issueTokens(record.clientId, record.scope);
+      const tokens = await this.store.issueTokens(record.clientId, record.scope, record.resource);
       json(res, 200, {
         access_token: tokens.accessToken,
         token_type: "Bearer",

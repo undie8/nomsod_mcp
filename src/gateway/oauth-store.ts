@@ -12,6 +12,7 @@ export interface OAuthClientRecord {
 interface TokenRecord {
   clientId: string;
   scope: string;
+  resource: string;
   expiresAt: number;
 }
 
@@ -93,7 +94,7 @@ export class OAuthStore {
     return this.data.clients[clientId];
   }
 
-  async issueTokens(clientId: string, scope: string): Promise<{
+  async issueTokens(clientId: string, scope: string, resource: string): Promise<{
     accessToken: string;
     refreshToken: string;
     expiresIn: number;
@@ -105,38 +106,47 @@ export class OAuthStore {
     this.data.accessTokens[this.hash(accessToken)] = {
       clientId,
       scope,
+      resource,
       expiresAt: Date.now() + expiresIn * 1000
     };
     this.data.refreshTokens[this.hash(refreshToken)] = {
       clientId,
       scope,
+      resource,
       expiresAt: Date.now() + 30 * 24 * 3600 * 1000
     };
     await this.persist();
     return { accessToken, refreshToken, expiresIn };
   }
 
-  async rotateRefreshToken(refreshToken: string, clientId?: string): Promise<{
+  async rotateRefreshToken(refreshToken: string, clientId?: string, resource?: string): Promise<{
     accessToken: string;
     refreshToken: string;
     expiresIn: number;
     scope: string;
+    resource: string;
   } | undefined> {
     await this.load();
     const key = this.hash(refreshToken);
     const record = this.data.refreshTokens[key];
     if (!record || record.expiresAt <= Date.now()) return undefined;
     if (clientId && record.clientId !== clientId) return undefined;
+    if (resource && record.resource !== resource) return undefined;
     delete this.data.refreshTokens[key];
 
-    const next = await this.issueTokens(record.clientId, record.scope);
-    return { ...next, scope: record.scope };
+    const next = await this.issueTokens(record.clientId, record.scope, record.resource);
+    return { ...next, scope: record.scope, resource: record.resource };
   }
 
-  async verifyAccessToken(accessToken: string): Promise<TokenRecord | undefined> {
+  async verifyAccessToken(accessToken: string, resource?: string, requiredScopes: string[] = []): Promise<TokenRecord | undefined> {
     await this.load();
     const record = this.data.accessTokens[this.hash(accessToken)];
     if (!record || record.expiresAt <= Date.now()) return undefined;
+    if (resource && record.resource !== resource) return undefined;
+
+    const granted = new Set(record.scope.split(/\s+/).filter(Boolean));
+    if (requiredScopes.some(scope => !granted.has(scope))) return undefined;
+
     return record;
   }
 }
