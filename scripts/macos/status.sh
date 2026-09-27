@@ -49,7 +49,7 @@ health_host() {
   printf '%s' "$VALUE"
 }
 
-for LABEL in com.nomsod.mcp.supervisor com.nomsod.mcp.agent com.nomsod.mcp.watchdog; do
+for LABEL in com.nomsod.mcp.supervisor com.nomsod.mcp.agent com.nomsod.mcp.control com.nomsod.mcp.updater com.nomsod.mcp.watchdog; do
   echo ""
   echo "=== $LABEL ==="
   /bin/launchctl print "$DOMAIN/$LABEL" 2>/dev/null |

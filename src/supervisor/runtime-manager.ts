@@ -48,8 +48,11 @@ export class RuntimeManager {
   }
 
   private startRuntime(release: RuntimeRelease, runtimePort: number): ManagedRuntime {
+    const gatewayExecutable =
+      process.env.NOMSOD_GATEWAY_EXECUTABLE?.trim() || process.execPath;
+
     const proc = spawn(
-      process.execPath,
+      gatewayExecutable,
       [release.main],
       {
         cwd: this.root,

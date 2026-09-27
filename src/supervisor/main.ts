@@ -6,8 +6,11 @@ import { OAuthService } from "../gateway/oauth.js";
 import { DeviceRegistry } from "../gateway/registry.js";
 import { ReleaseManager } from "./release-manager.js";
 import { RuntimeManager } from "./runtime-manager.js";
+import { getNomsodVersion } from "../shared/version.js";
+import { serveDistribution } from "./distribution.js";
 
 const root = process.cwd();
+const version = getNomsodVersion(root);
 const host = process.env.NOMSOD_GATEWAY_HOST || "127.0.0.1";
 const port = Number(process.env.NOMSOD_GATEWAY_PORT || 3219);
 const controlPort = Number(process.env.NOMSOD_CONTROL_PORT || port + 2);
@@ -138,11 +141,13 @@ const publicServer = http.createServer(async (req, res) => {
     return;
   }
 
+  if (await serveDistribution(req, res, url, root)) return;
+
   if (url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
       service: "nomsod-supervisor",
-      version: "0.1.0",
+      version,
       supervisorPid: process.pid,
       connectedDevices: hub.listDevices().length,
       transport: "streamable-http-stateless",

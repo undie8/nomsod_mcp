@@ -151,7 +151,8 @@ export class ReleaseManager {
       "package.json",
       "package-lock.json",
       "tsconfig.json",
-      "tsconfig.build.json"
+      "tsconfig.build.json",
+      "VERSION"
     ]) {
       await fs.copyFile(path.join(this.root, file), path.join(dir, file));
     }

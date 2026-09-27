@@ -9,8 +9,24 @@ param(
 $ErrorActionPreference = "Stop"
 
 $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
-$Node = (Get-Command node -ErrorAction Stop).Source
-$Npm = (Get-Command npm -ErrorAction Stop).Source
+$portableNode = Join-Path $Root ".runtime\node\node.exe"
+$portableNpm = Join-Path $Root ".runtime\node\npm.cmd"
+
+if (-not (Test-Path $portableNode) -or -not (Test-Path $portableNpm)) {
+  if ($DryRun) {
+    $Node = (Get-Command node -ErrorAction Stop).Source
+    $Npm = (Get-Command npm -ErrorAction Stop).Source
+  } else {
+    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\windows\ensure-node.ps1") -Root $Root | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Portable Node installation failed" }
+    $Node = $portableNode
+    $Npm = $portableNpm
+  }
+} else {
+  $Node = $portableNode
+  $Npm = $portableNpm
+}
+
 $CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $CurrentSid = $CurrentIdentity.User.Value
 $Quote = [char]34
@@ -129,13 +145,60 @@ if (-not $SkipConfigCheck) {
 }
 
 Set-Location $Root
-Write-Host "Installing dependencies..."
-& $Npm install
-if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+$runtimeDir = Join-Path $Root ".runtime"
+$supervisorNode = Join-Path $runtimeDir "Nomsod MCP Supervisor.exe"
+$gatewayNode = Join-Path $runtimeDir "Nomsod MCP Gateway.exe"
+$agentNode = Join-Path $runtimeDir "Nomsod MCP Agent.exe"
+$workerNode = Join-Path $runtimeDir "Nomsod MCP Worker.exe"
+$controlExe = Join-Path $Root "build\windows\Nomsod MCP Control.exe"
 
-Write-Host "Building immutable bootstrap..."
-& $Npm run build
-if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+if (-not $DryRun) {
+  Write-Host "Installing dependencies..."
+  & $Npm install
+  if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+
+  Write-Host "Building immutable bootstrap..."
+  & $Npm run build
+  if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
+
+  # The tray executable is locked while running on Windows. Stop only the
+  # Control UI; the Supervisor/Agent continue running during this rebuild.
+  & schtasks.exe /End /TN "NomsodMCP-Control" 1>$null 2>$null
+  Get-Process -Name "Nomsod MCP Control" -ErrorAction SilentlyContinue |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 300
+
+  Write-Host "Building Nomsod MCP Control..."
+  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\windows\build-control.ps1") -Root $Root
+  if ($LASTEXITCODE -ne 0) { throw "Nomsod MCP Control build failed" }
+
+  New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+
+  foreach ($alias in @($supervisorNode, $gatewayNode, $agentNode, $workerNode)) {
+    if (-not (Test-Path $alias)) {
+      Copy-Item -LiteralPath $Node -Destination $alias -Force
+    }
+  }
+
+  function Set-DotEnvValue {
+    param([string]$Key, [string]$Value)
+    $envFile = Join-Path $Root ".env"
+    $lines = [Collections.Generic.List[string]]::new()
+    if (Test-Path $envFile) {
+      foreach ($line in [IO.File]::ReadAllLines($envFile, [Text.Encoding]::UTF8)) {
+        if ($line -match ("^" + [Regex]::Escape($Key) + "=")) { continue }
+        $lines.Add($line)
+      }
+    }
+    $lines.Add($Key + "=" + $Value)
+    [IO.File]::WriteAllLines($envFile, $lines, (New-Object Text.UTF8Encoding($false)))
+  }
+
+  Set-DotEnvValue "NOMSOD_GATEWAY_EXECUTABLE" $gatewayNode
+  Set-DotEnvValue "NOMSOD_WORKER_EXECUTABLE" $workerNode
+} else {
+  Write-Host "[dry-run] skipping dependency install and binary builds"
+}
 
 $supervisorArgs = $Quote + "dist\bootstrap\supervisor.js" + $Quote
 $agentArgs = $Quote + "dist\bootstrap\agent.js" + $Quote
@@ -159,7 +222,7 @@ if ($Mode -in @("Both", "Supervisor")) {
     Description = "Nomsod MCP Supervisor - machine-level connection and runtime guardian"
     TriggerXml = $supervisorTrigger
     PrincipalXml = $systemPrincipal
-    Command = $Node
+    Command = $supervisorNode
     Arguments = $supervisorArgs
     WorkingDirectory = $Root
   }
@@ -189,12 +252,78 @@ if ($Mode -in @("Both", "Agent")) {
     Description = "Nomsod MCP Agent Guardian - user-session device connection"
     TriggerXml = $agentTrigger
     PrincipalXml = $userPrincipal
-    Command = $Node
+    Command = $agentNode
     Arguments = $agentArgs
     WorkingDirectory = $Root
   }
 
   Install-Task "NomsodMCP-Agent" (New-TaskXml @params)
+}
+
+# Per-user tray control. This UI is deliberately independent from the core services.
+$sidXml = Escape-Xml $CurrentSid
+$controlTrigger = @"
+<LogonTrigger>
+  <Enabled>true</Enabled>
+  <UserId>$sidXml</UserId>
+</LogonTrigger>
+"@
+
+$controlPrincipal = @"
+<Principal id="Author">
+  <UserId>$sidXml</UserId>
+  <LogonType>InteractiveToken</LogonType>
+  <RunLevel>LeastPrivilege</RunLevel>
+</Principal>
+"@
+
+$params = @{
+  Description = "Nomsod MCP Control - system tray status and restart controls"
+  TriggerXml = $controlTrigger
+  PrincipalXml = $controlPrincipal
+  Command = $controlExe
+  Arguments = $Quote + $Root + $Quote
+  WorkingDirectory = $Root
+}
+Install-Task "NomsodMCP-Control" (New-TaskXml @params)
+
+$updaterScript = Join-Path $Root "scripts\windows\update.ps1"
+$updaterTrigger = @"
+<LogonTrigger>
+  <Enabled>true</Enabled>
+  <UserId>$sidXml</UserId>
+</LogonTrigger>
+<TimeTrigger>
+  <Repetition>
+    <Interval>PT1M</Interval>
+    <StopAtDurationEnd>false</StopAtDurationEnd>
+  </Repetition>
+  <StartBoundary>$([DateTime]::Now.AddMinutes(1).ToString("s"))</StartBoundary>
+  <Enabled>true</Enabled>
+</TimeTrigger>
+"@
+
+$updaterPrincipal = @"
+<Principal id="Author">
+  <UserId>$sidXml</UserId>
+  <LogonType>InteractiveToken</LogonType>
+  <RunLevel>LeastPrivilege</RunLevel>
+</Principal>
+"@
+
+$updaterArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
+  $Quote + $updaterScript + $Quote + " -Root " + $Quote + $Root + $Quote
+
+$params = @{
+  Description = "Nomsod MCP updater - checks release manifests every minute"
+  TriggerXml = $updaterTrigger
+  PrincipalXml = $updaterPrincipal
+  Command = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  Arguments = $updaterArgs
+  WorkingDirectory = $Root
+}
+if ($env:NOMSOD_UPDATE_IN_PROGRESS -ne "1") {
+  Install-Task "NomsodMCP-Updater" (New-TaskXml @params)
 }
 
 if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
@@ -234,6 +363,16 @@ if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
   Write-Warning "Agent installed without the machine-level watchdog because PowerShell is not elevated. Task Scheduler will still restart the Agent when its process exits."
 }
 
+if (-not $DryRun) {
+  $dataDir = Join-Path $Root "data"
+  New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+  [IO.File]::WriteAllText(
+    (Join-Path $dataDir "install-role.txt"),
+    $Mode + [Environment]::NewLine,
+    (New-Object Text.UTF8Encoding($false))
+  )
+}
+
 if (-not $NoStart -and -not $DryRun) {
   if ($Mode -in @("Both", "Supervisor")) {
     & schtasks.exe /Run /TN "NomsodMCP-Supervisor" | Out-Host
@@ -242,8 +381,14 @@ if (-not $NoStart -and -not $DryRun) {
   if ($Mode -in @("Both", "Agent")) {
     & schtasks.exe /Run /TN "NomsodMCP-Agent" | Out-Host
   }
+
+  & schtasks.exe /Run /TN "NomsodMCP-Control" | Out-Host
 }
 
 Write-Host "Nomsod MCP Windows tasks installed."
 Write-Host "Project: $Root"
-Write-Host "Node: $Node"
+Write-Host "Supervisor process: $supervisorNode"
+Write-Host "Gateway process: $gatewayNode"
+Write-Host "Agent process: $agentNode"
+Write-Host "Worker process: $workerNode"
+Write-Host "Control process: $controlExe"

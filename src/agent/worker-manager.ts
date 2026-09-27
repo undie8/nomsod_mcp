@@ -50,8 +50,11 @@ export class AgentWorkerManager {
   }
 
   private startWorker(release: RuntimeRelease, port: number): ManagedWorker {
+    const workerExecutable =
+      process.env.NOMSOD_WORKER_EXECUTABLE?.trim() || process.execPath;
+
     const processHandle = spawn(
-      process.execPath,
+      workerExecutable,
       [release.main],
       {
         cwd: this.root,

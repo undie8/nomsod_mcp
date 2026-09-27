@@ -317,6 +317,55 @@ The compiled bootstraps load `.env` automatically and write UTF-8 logs under `da
 
 Set `NOMSOD_LOG_DIR` to use a different log location.
 
+
+## Versioned distribution and terminal installation
+
+Nomsod MCP publishes separate Windows and macOS release packages at `mcp.nomsod.net`. Each release has a semantic version and SHA-256 digest. Versioned package URLs are immutable; `releases/latest/*.json` only points clients at the newest package.
+
+A new computer can install the default **Agent + Control UI** directly from a terminal.
+
+Windows PowerShell:
+
+```powershell
+irm https://mcp.nomsod.net/install/windows.ps1 | iex
+```
+
+macOS Terminal:
+
+```sh
+curl -fsSL https://mcp.nomsod.net/install/macos.sh | sh
+```
+
+The installer prompts for the Nomsod pairing key without echoing it. Computer identity and display name are created at runtime; no machine name is hardcoded.
+
+Default installation locations:
+
+- Windows: `%LOCALAPPDATA%\Nomsod MCP`
+- macOS: `~/Library/Application Support/Nomsod MCP`
+
+The installed Control UI uses the Nomsod cat icon on the Windows notification area and macOS menu bar. It shows status, device identity, Gateway/MCP URL, version, restart controls and a confirmation-gated **Reveal keys** action. Quitting the Control UI does not stop the Supervisor or Agent.
+
+### Runtime process names
+
+Long-lived processes use role-specific names so Activity Monitor and Task Manager remain understandable:
+
+- `Nomsod MCP Supervisor` — keeps the public Gateway runtime healthy.
+- `Nomsod MCP Gateway` — serves MCP/OAuth and connected-device routing.
+- `Nomsod MCP Agent` — maintains one computer's connection to the Gateway.
+- `Nomsod MCP Worker` — executes file, shell and device actions behind the Agent.
+- `Nomsod MCP Control` — macOS menu bar / Windows notification-area UI.
+
+On macOS each long-lived role is installed as a lightweight background app bundle with the Nomsod cat icon. The menu bar shows the transparent cat icon together with the installed version. Updater and watchdog jobs are scheduled checks, not permanent long-lived role processes.
+
+### Automatic updates
+
+Each installation creates an updater that checks the platform-specific latest manifest every 60 seconds:
+
+- `https://mcp.nomsod.net/releases/latest/windows.json`
+- `https://mcp.nomsod.net/releases/latest/macos.json`
+
+An update is applied only after its package SHA-256 matches the manifest. `.env`, device identity, `data/`, logs and the portable runtime are preserved. Windows and macOS packages are independent, so either platform can be released without replacing the other package.
+
 ## Deliberate non-goals
 
 Nomsod MCP does not connect to 9Router and does not route AI-model or image-generation traffic.

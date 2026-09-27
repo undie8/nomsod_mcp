@@ -4,9 +4,11 @@ import path from "node:path";
 import WebSocket from "ws";
 import { buildDescriptor, loadIdentity, saveIdentity } from "../shared/identity.js";
 import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/protocol.js";
+import { getNomsodVersion } from "../shared/version.js";
 import { AgentWorkerManager } from "./worker-manager.js";
 
 const root = process.cwd();
+const version = getNomsodVersion(root);
 const gatewayUrl = process.env.NOMSOD_GATEWAY_WS || "ws://127.0.0.1:3219/agent";
 const pairingToken = process.env.NOMSOD_PAIRING_TOKEN || "";
 const heartbeatMs = Number(process.env.NOMSOD_HEARTBEAT_MS || 15_000);
@@ -128,7 +130,7 @@ async function startHealthServer(): Promise<void> {
       res.end(JSON.stringify({
         ok: true,
         service: "nomsod-agent-guardian",
-        version: "0.1.0",
+        version,
         guardianPid: process.pid,
         gatewayConnected,
         worker: workerManager.status().active

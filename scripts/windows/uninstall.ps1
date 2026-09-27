@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "SilentlyContinue"
 
-$tasks = @()
+$tasks = @("NomsodMCP-Control", "NomsodMCP-Updater")
 if ($Mode -in @("Both", "Supervisor")) { $tasks += "NomsodMCP-Supervisor" }
 if ($Mode -in @("Both", "Agent")) { $tasks += "NomsodMCP-Agent" }
 if ($Mode -eq "Both" -or $Mode -eq "Supervisor") { $tasks += "NomsodMCP-Watchdog" }

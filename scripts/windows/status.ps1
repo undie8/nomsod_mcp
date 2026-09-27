@@ -37,7 +37,7 @@ function Format-HealthHost {
   return $HostValue
 }
 
-foreach ($task in @("NomsodMCP-Supervisor", "NomsodMCP-Agent", "NomsodMCP-Watchdog")) {
+foreach ($task in @("NomsodMCP-Supervisor", "NomsodMCP-Agent", "NomsodMCP-Control", "NomsodMCP-Updater", "NomsodMCP-Watchdog")) {
   Write-Host ""
   Write-Host "=== $task ==="
   & schtasks.exe /Query /TN $task /V /FO LIST 2>$null |

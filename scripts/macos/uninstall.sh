@@ -32,6 +32,8 @@ if [ "$MODE" = "both" ] || [ "$MODE" = "agent" ]; then
   remove_user com.nomsod.mcp.agent
 fi
 
+remove_user com.nomsod.mcp.control
+remove_user com.nomsod.mcp.updater
 remove_user com.nomsod.mcp.watchdog
 
 echo "Nomsod data, releases, .env and device identity were preserved."
