@@ -51,6 +51,21 @@ server.listen(port, host, () => {
   console.log(`[runtime] listening on http://${host}:${port}`);
 });
 
+function exitWhenParentDisconnects(label: string): void {
+  if (!process.connected) return;
+
+  process.once("disconnect", () => {
+    console.warn(`[${label}] parent IPC disconnected; exiting to avoid orphan process`);
+
+    const forceTimer = setTimeout(() => process.exit(0), 2_000);
+    forceTimer.unref();
+
+    server.close(() => process.exit(0));
+  });
+}
+
+exitWhenParentDisconnects("runtime");
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => server.close(() => process.exit(0)));
 }

@@ -51,7 +51,9 @@ export function buildDescriptor(deviceId: string): DeviceDescriptor {
       "fs.write",
       "shell.exec",
       "text.utf8-strict",
-      "connection.auto-reconnect"
+      "connection.auto-reconnect",
+      "agent.worker-self-heal",
+      "agent.worker-blue-green"
     ]
   };
 }

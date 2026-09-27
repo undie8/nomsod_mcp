@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import path from "node:path";
 import type { RuntimeRelease } from "./release-manager.js";
 import { ReleaseManager } from "./release-manager.js";
 
@@ -51,7 +50,7 @@ export class RuntimeManager {
   private startRuntime(release: RuntimeRelease, runtimePort: number): ManagedRuntime {
     const proc = spawn(
       process.execPath,
-      [path.join(this.root, "node_modules", "tsx", "dist", "cli.mjs"), release.main],
+      [release.main],
       {
         cwd: this.root,
         windowsHide: true,
@@ -61,7 +60,7 @@ export class RuntimeManager {
           NOMSOD_CONTROL_URL: `http://127.0.0.1:${this.controlPort}`,
           NOMSOD_CONTROL_KEY: this.controlKey
         },
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: ["ignore", "pipe", "pipe", "ipc"]
       }
     );
 

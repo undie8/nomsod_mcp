@@ -131,6 +131,45 @@ export function createNomsodMcpHandler(hub: ComputerHub) {
         textResult(await hub.request(deviceId, "shell.exec", { command, cwd, shell, timeoutMs }, timeoutMs))
     );
 
+    server.registerTool(
+      "device_runtime_status",
+      {
+        title: "Device action runtime status",
+        description: "Show the selected computer's long-lived Agent Guardian and replaceable action worker status.",
+        inputSchema: z.object({
+          deviceId: z.string().min(1)
+        })
+      },
+      async ({ deviceId }) =>
+        textResult(await hub.request(deviceId, "agent.runtime_status", undefined, 30_000))
+    );
+
+    server.registerTool(
+      "reload_device_runtime",
+      {
+        title: "Safely reload a device action runtime",
+        description: "Typecheck, snapshot, health-check, and blue/green switch the selected computer's action worker while its Agent Guardian keeps the device connection alive.",
+        inputSchema: z.object({
+          deviceId: z.string().min(1)
+        })
+      },
+      async ({ deviceId }) =>
+        textResult(await hub.request(deviceId, "agent.reload_runtime", undefined, 180_000))
+    );
+
+    server.registerTool(
+      "rollback_device_runtime",
+      {
+        title: "Rollback a device action runtime",
+        description: "Switch the selected computer back to its previous known-good action worker without reconnecting the Agent Guardian.",
+        inputSchema: z.object({
+          deviceId: z.string().min(1)
+        })
+      },
+      async ({ deviceId }) =>
+        textResult(await hub.request(deviceId, "agent.rollback_runtime", undefined, 180_000))
+    );
+
     if (hub.runtimeStatus) {
       server.registerTool(
         "runtime_status",

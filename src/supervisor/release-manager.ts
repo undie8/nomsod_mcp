@@ -16,30 +16,56 @@ interface RuntimeStateFile {
   updatedAt?: string;
 }
 
+export interface ReleaseManagerOptions {
+  releasesDirName?: string;
+  stateFileName?: string;
+  entryRelativePath?: string;
+}
+
+interface CommandResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}
+
 export class ReleaseManager {
   readonly releasesDir: string;
   readonly statePath: string;
+  readonly entryRelativePath: string;
+  readonly builtEntryRelativePath: string;
 
-  constructor(readonly root: string) {
-    this.releasesDir = path.join(root, "data", "releases");
-    this.statePath = path.join(root, "data", "runtime-state.json");
+  constructor(
+    readonly root: string,
+    options: ReleaseManagerOptions = {}
+  ) {
+    this.releasesDir = path.join(root, "data", options.releasesDirName || "releases");
+    this.statePath = path.join(root, "data", options.stateFileName || "runtime-state.json");
+    this.entryRelativePath = options.entryRelativePath || path.join("src", "gateway", "main.ts");
+
+    const fromSrc = path.relative("src", this.entryRelativePath);
+    if (fromSrc.startsWith("..") || path.isAbsolute(fromSrc)) {
+      throw new Error(`Release entry must be under src/: ${this.entryRelativePath}`);
+    }
+
+    this.builtEntryRelativePath = path.join(
+      "dist",
+      fromSrc.replace(/\.tsx?$/i, ".js")
+    );
   }
 
   async initialize(): Promise<void> {
     await fs.mkdir(this.releasesDir, { recursive: true });
   }
 
-  async runTypecheck(timeoutMs = 120_000): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-    const executable = process.platform === "win32"
-      ? (process.env.ComSpec || "cmd.exe")
-      : "npm";
-    const args = process.platform === "win32"
-      ? ["/d", "/s", "/c", "npm run typecheck"]
-      : ["run", "typecheck"];
-
+  private async runProcess(
+    executable: string,
+    args: string[],
+    cwd: string,
+    timeoutMs: number
+  ): Promise<CommandResult> {
     return new Promise(resolve => {
       const child = spawn(executable, args, {
-        cwd: this.root,
+        cwd,
         windowsHide: true,
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"]
@@ -57,7 +83,7 @@ export class ReleaseManager {
       };
 
       const timer = setTimeout(() => {
-        stderr += `\nTypecheck timed out after ${timeoutMs}ms`;
+        stderr += `\nCommand timed out after ${timeoutMs}ms`;
         try { child.kill("SIGKILL"); } catch {}
         finish(false);
       }, timeoutMs);
@@ -72,6 +98,43 @@ export class ReleaseManager {
     });
   }
 
+  async runTypecheck(timeoutMs = 120_000): Promise<CommandResult> {
+    const tscCli = path.join(this.root, "node_modules", "typescript", "bin", "tsc");
+    const project = path.join(this.root, "tsconfig.json");
+
+    return this.runProcess(
+      process.execPath,
+      [tscCli, "--noEmit", "-p", project],
+      this.root,
+      timeoutMs
+    );
+  }
+
+  private async buildSnapshot(dir: string, timeoutMs = 120_000): Promise<void> {
+    const tscCli = path.join(this.root, "node_modules", "typescript", "bin", "tsc");
+    const project = path.join(dir, "tsconfig.build.json");
+    const outDir = path.join(dir, "dist");
+
+    const built = await this.runProcess(
+      process.execPath,
+      [tscCli, "-p", project, "--outDir", outDir],
+      dir,
+      timeoutMs
+    );
+
+    if (!built.ok) {
+      throw new Error(
+        "Release snapshot build failed:\n" +
+        built.stdout.slice(-4_000) +
+        "\n" +
+        built.stderr.slice(-8_000)
+      );
+    }
+
+    const builtMain = path.join(dir, this.builtEntryRelativePath);
+    await fs.access(builtMain);
+  }
+
   async createSnapshot(): Promise<RuntimeRelease> {
     const id = `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomBytes(4).toString("hex")}`;
     const dir = path.join(this.releasesDir, id);
@@ -84,27 +147,39 @@ export class ReleaseManager {
       errorOnExist: true
     });
 
-    for (const file of ["package.json", "package-lock.json", "tsconfig.json"]) {
-      try { await fs.copyFile(path.join(this.root, file), path.join(dir, file)); } catch {}
+    for (const file of [
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json",
+      "tsconfig.build.json"
+    ]) {
+      await fs.copyFile(path.join(this.root, file), path.join(dir, file));
     }
+
+    await this.buildSnapshot(dir);
 
     await fs.writeFile(
       path.join(dir, "release.json"),
-      JSON.stringify({ id, createdAt }, null, 2),
+      JSON.stringify({
+        id,
+        createdAt,
+        entryRelativePath: this.entryRelativePath,
+        builtEntryRelativePath: this.builtEntryRelativePath
+      }, null, 2),
       { encoding: "utf8", mode: 0o600 }
     );
 
     return {
       id,
       dir,
-      main: path.join(dir, "src", "gateway", "main.ts"),
+      main: path.join(dir, this.builtEntryRelativePath),
       createdAt
     };
   }
 
   async getRelease(id: string): Promise<RuntimeRelease | undefined> {
     const dir = path.join(this.releasesDir, id);
-    const main = path.join(dir, "src", "gateway", "main.ts");
+    const main = path.join(dir, this.builtEntryRelativePath);
 
     try {
       await fs.access(main);
