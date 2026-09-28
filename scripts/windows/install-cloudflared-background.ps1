@@ -233,7 +233,10 @@ $watchdogParams = @{
 }
 
 # Stop the old visible connector before replacing its task definition.
-& schtasks.exe /End /TN "NomsodMCP-Cloudflared" 1>$null 2>$null
+$cloudflaredTask = Get-ScheduledTask -TaskName "NomsodMCP-Cloudflared" -ErrorAction SilentlyContinue
+if ($cloudflaredTask) {
+  Stop-ScheduledTask -TaskName "NomsodMCP-Cloudflared" -ErrorAction SilentlyContinue
+}
 Get-CimInstance Win32_Process |
   Where-Object {
     $_.Name -ieq "cloudflared.exe" -and
