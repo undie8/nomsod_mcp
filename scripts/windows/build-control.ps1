@@ -17,6 +17,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 }
 $BackgroundOutDir = Join-Path $OutDir ("background\" + $Version)
 $BackgroundOutFile = Join-Path $BackgroundOutDir "Nomsod MCP Background.exe"
+$TunnelOutFile = Join-Path $BackgroundOutDir "Nomsod MCP Tunnel.exe"
 $IconFile = Join-Path $Root "assets\nomsod-mcp-transparent.ico"
 New-Item -ItemType Directory -Force -Path $OutDir,$BackgroundOutDir | Out-Null
 
@@ -66,6 +67,9 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $BackgroundOutFile)) {
   throw "Failed to build Nomsod MCP Background."
 }
 
+Copy-Item -LiteralPath $BackgroundOutFile -Destination $TunnelOutFile -Force
+
 Write-Host "Built: $OutFile"
 Write-Host "Built: $BackgroundOutFile"
+Write-Host "Built: $TunnelOutFile"
 Write-Host "Icon: $IconFile"

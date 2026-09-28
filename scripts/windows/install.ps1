@@ -81,6 +81,21 @@ function Assert-Configuration {
   }
 }
 
+function Get-DotEnvValue {
+  param([string]$Key)
+
+  $envFile = Join-Path $Root ".env"
+  if (-not (Test-Path $envFile)) { return "" }
+
+  foreach ($line in [IO.File]::ReadAllLines($envFile, [Text.Encoding]::UTF8)) {
+    if ($line -match ("^" + [Regex]::Escape($Key) + "=(.*)$")) {
+      return $Matches[1].Trim().Trim('"').Trim("'")
+    }
+  }
+
+  return ""
+}
+
 function New-TaskXml {
   param(
     [string]$Description,
@@ -402,6 +417,30 @@ if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
   Install-Task "NomsodMCP-Watchdog" (New-TaskXml @params)
 } elseif ($Mode -eq "Agent") {
   Write-Warning "Agent installed without the machine-level watchdog because PowerShell is not elevated. Task Scheduler will still restart the Agent when its process exits."
+}
+
+$tunnelId = Get-DotEnvValue "NOMSOD_TUNNEL_ID"
+if ($tunnelId) {
+  $tunnelInstaller = Join-Path $Root "scripts\windows\install-cloudflared-background.ps1"
+
+  if ($DryRun) {
+    Write-Host "[dry-run] would configure hidden Cloudflare tunnel tasks from $tunnelInstaller"
+  } else {
+    $tunnelArgs = @(
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy", "Bypass",
+      "-File", $tunnelInstaller,
+      "-Root", $Root
+    )
+    if ($NoStart) { $tunnelArgs += "-NoStart" }
+
+    & powershell.exe @tunnelArgs
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to configure hidden Cloudflare tunnel tasks."
+    }
+  }
 }
 
 if (-not $DryRun) {
