@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import dns from "node:dns";
 import http from "node:http";
-import path from "node:path";
+import { URL } from "node:url";
 import WebSocket from "ws";
 import { buildDescriptor, loadIdentity, saveIdentity } from "../shared/identity.js";
 import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/protocol.js";
@@ -9,7 +10,15 @@ import { AgentWorkerManager } from "./worker-manager.js";
 
 const root = process.cwd();
 const version = getNomsodVersion(root);
-const gatewayUrl = process.env.NOMSOD_GATEWAY_WS || "ws://127.0.0.1:3219/agent";
+const gatewayPort = Number(process.env.NOMSOD_GATEWAY_PORT || 3219);
+const peerPort = Number(process.env.NOMSOD_PEER_PORT || gatewayPort + 5);
+const legacyGatewayUrl = process.env.NOMSOD_GATEWAY_WS || ("ws://127.0.0.1:" + gatewayPort + "/agent");
+const localGatewayUrl = "ws://127.0.0.1:" + gatewayPort + "/agent";
+const configuredGatewayUrls = (process.env.NOMSOD_GATEWAY_WS_LIST || legacyGatewayUrl)
+  .split(/[;,\s]+/)
+  .map(value => value.trim())
+  .filter(Boolean);
+const gatewayUrls = new Set<string>([localGatewayUrl, ...configuredGatewayUrls]);
 const pairingToken = process.env.NOMSOD_PAIRING_TOKEN || "";
 const heartbeatMs = Number(process.env.NOMSOD_HEARTBEAT_MS || 15_000);
 const staleMs = Number(process.env.NOMSOD_STALE_MS || 45_000);
@@ -26,9 +35,13 @@ const fallbackResolver = new dns.promises.Resolver();
 fallbackResolver.setServers(dnsServers);
 
 let stopping = false;
-let reconnectAttempt = 0;
-let gatewayConnected = false;
 let healthServer: http.Server | undefined;
+const connectedGateways = new Set<string>();
+const sockets = new Set<WebSocket>();
+const reconnectAttempts = new Map<string, number>();
+const connectingGateways = new Set<string>();
+let peerDiscoveryTimer: NodeJS.Timeout | undefined;
+let identityWriteChain: Promise<void> = Promise.resolve();
 
 function resilientLookup(
   hostname: string,
@@ -84,6 +97,98 @@ function resilientLookup(
   });
 }
 
+function tailscaleCliCandidates(): string[] {
+  const configured = (process.env.NOMSOD_TAILSCALE_CLI || "").trim();
+  const candidates = process.platform === "win32"
+    ? [
+        configured,
+        "C:\Program Files\Tailscale\tailscale.exe",
+        "C:\Program Files (x86)\Tailscale\tailscale.exe",
+        "tailscale.exe"
+      ]
+    : [
+        configured,
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        "/opt/homebrew/bin/tailscale",
+        "/usr/local/bin/tailscale",
+        "tailscale"
+      ];
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function discoverTailscaleGatewayUrls(): string[] {
+  for (const executable of tailscaleCliCandidates()) {
+    try {
+      const raw = execFileSync(executable, ["status", "--json"], {
+        encoding: "utf8",
+        timeout: 3_000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+
+      const status = JSON.parse(raw) as {
+        Peer?: Record<string, { Online?: boolean; TailscaleIPs?: string[] }>;
+      };
+
+      const urls: string[] = [];
+      for (const peer of Object.values(status.Peer || {})) {
+        if (peer.Online !== true) continue;
+        const address = (peer.TailscaleIPs || []).find(value => /^100\./.test(value));
+        if (!address) continue;
+        urls.push("ws://" + address + ":" + peerPort + "/agent");
+      }
+      return urls;
+    } catch {
+      continue;
+    }
+  }
+
+  return [];
+}
+async function probeNomsodPeerGateway(gatewayUrl: string): Promise<boolean> {
+  let url: URL;
+  try {
+    url = new URL(gatewayUrl.replace(/^ws:/, "http:"));
+    url.pathname = "/health";
+    url.search = "";
+  } catch {
+    return false;
+  }
+
+  return new Promise(resolve => {
+    const req = http.get(url, { timeout: 1_200 }, res => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+
+      res.on("data", chunk => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        if (size <= 16 * 1024) chunks.push(buffer);
+      });
+
+      res.on("end", () => {
+        if (res.statusCode !== 200 || size > 16 * 1024) {
+          resolve(false);
+          return;
+        }
+
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          resolve(body?.ok === true && body?.service === "nomsod-peer");
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
+  });
+}
 function backoffMs(attempt: number): number {
   const base = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
   const jitter = Math.floor(Math.random() * Math.max(250, base * 0.25));
@@ -132,7 +237,9 @@ async function startHealthServer(): Promise<void> {
         service: "nomsod-agent-guardian",
         version,
         guardianPid: process.pid,
-        gatewayConnected,
+        gatewayConnected: connectedGateways.size > 0,
+        connectedGateways: connectedGateways.size,
+        configuredGateways: gatewayUrls.size,
         worker: workerManager.status().active
       }));
       return;
@@ -170,15 +277,31 @@ async function run(): Promise<void> {
   console.log(
     `[agent-guardian] device=${descriptor.displayName} id=${descriptor.deviceId} platform=${descriptor.platform}`
   );
+  console.log(`[agent-guardian] configured gateways=${gatewayUrls.size}`);
 
-  const connect = () => {
-    if (stopping) return;
+  const saveDeviceToken = async (deviceToken: string) => {
+    if (
+      identity.deviceToken?.startsWith("ndt2.") &&
+      !deviceToken.startsWith("ndt2.")
+    ) {
+      return;
+    }
+
+    identity.deviceToken = deviceToken;
+    identityWriteChain = identityWriteChain.then(() => saveIdentity(identity));
+    await identityWriteChain;
+  };
+
+  const connect = (gatewayUrl: string) => {
+    if (stopping || connectingGateways.has(gatewayUrl) || connectedGateways.has(gatewayUrl)) return;
+    connectingGateways.add(gatewayUrl);
 
     const ws = new WebSocket(gatewayUrl, {
       handshakeTimeout: 15_000,
       perMessageDeflate: false,
       lookup: resilientLookup as any
     });
+    sockets.add(ws);
 
     let lastInbound = Date.now();
     let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -194,8 +317,8 @@ async function run(): Promise<void> {
     };
 
     ws.on("open", () => {
-      gatewayConnected = false;
-      reconnectAttempt = 0;
+      connectedGateways.delete(gatewayUrl);
+      reconnectAttempts.set(gatewayUrl, 0);
       lastInbound = Date.now();
 
       send({
@@ -212,7 +335,7 @@ async function run(): Promise<void> {
 
       staleTimer = setInterval(() => {
         if (Date.now() - lastInbound > staleMs) {
-          console.warn("[agent-guardian] gateway heartbeat stale; forcing reconnect");
+          console.warn(`[agent-guardian] gateway stale ${gatewayUrl}; forcing reconnect`);
           ws.terminate();
         }
       }, Math.max(5_000, Math.floor(heartbeatMs / 2)));
@@ -231,15 +354,15 @@ async function run(): Promise<void> {
       if (message.type === "heartbeat") return;
 
       if (message.type === "paired") {
-        identity.deviceToken = message.deviceToken;
-        await saveIdentity(identity);
-        console.log("[agent-guardian] paired; persistent device token saved");
+        await saveDeviceToken(message.deviceToken);
+        console.log(`[agent-guardian] paired via ${gatewayUrl}; persistent device token saved`);
         return;
       }
 
       if (message.type === "ready") {
-        gatewayConnected = true;
-        console.log("[agent-guardian] connected and ready");
+        connectingGateways.delete(gatewayUrl);
+        connectedGateways.add(gatewayUrl);
+        console.log(`[agent-guardian] connected and ready: ${gatewayUrl}`);
         return;
       }
 
@@ -271,29 +394,61 @@ async function run(): Promise<void> {
     });
 
     ws.on("error", error => {
-      console.warn("[agent-guardian] websocket error:", error.message);
+      console.warn(`[agent-guardian] websocket error ${gatewayUrl}:`, error.message);
     });
 
     ws.on("close", (code, reason) => {
-      gatewayConnected = false;
+      connectingGateways.delete(gatewayUrl);
+      connectedGateways.delete(gatewayUrl);
+      sockets.delete(ws);
       cleanupTimers();
       if (stopping) return;
 
-      const delay = backoffMs(reconnectAttempt++);
+      const attempt = reconnectAttempts.get(gatewayUrl) || 0;
+      const delay = backoffMs(attempt);
+      reconnectAttempts.set(gatewayUrl, attempt + 1);
       console.warn(
-        `[agent-guardian] disconnected code=${code} reason=${reason.toString() || "-"}; reconnect in ${delay}ms`
+        `[agent-guardian] disconnected ${gatewayUrl} code=${code} reason=${reason.toString() || "-"}; reconnect in ${delay}ms`
       );
-      setTimeout(connect, delay);
+      setTimeout(() => connect(gatewayUrl), delay);
     });
   };
 
-  connect();
+  const discoverAndConnectPeers = async () => {
+    await Promise.all(discoverTailscaleGatewayUrls().map(async gatewayUrl => {
+      if (gatewayUrls.has(gatewayUrl)) {
+        connect(gatewayUrl);
+        return;
+      }
+
+      if (!(await probeNomsodPeerGateway(gatewayUrl))) return;
+
+      gatewayUrls.add(gatewayUrl);
+      console.log("[agent-guardian] discovered Nomsod peer gateway: " + gatewayUrl);
+      connect(gatewayUrl);
+    }));
+  };
+
+  for (const gatewayUrl of gatewayUrls) {
+    connect(gatewayUrl);
+  }
+
+  void discoverAndConnectPeers();
+  peerDiscoveryTimer = setInterval(() => void discoverAndConnectPeers(), 30_000);
+  peerDiscoveryTimer.unref();
 }
 
 async function shutdown(): Promise<void> {
   if (stopping) return;
   stopping = true;
-  gatewayConnected = false;
+  connectedGateways.clear();
+  connectingGateways.clear();
+  if (peerDiscoveryTimer) clearInterval(peerDiscoveryTimer);
+
+  for (const ws of sockets) {
+    try { ws.close(1001, "agent shutdown"); } catch {}
+  }
+  sockets.clear();
 
   await Promise.all([
     workerManager.shutdown(),

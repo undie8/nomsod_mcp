@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import os from "node:os";
 import { URL } from "node:url";
 import { AgentHub } from "../gateway/agent-hub.js";
 import { OAuthService } from "../gateway/oauth.js";
@@ -9,17 +10,41 @@ import { RuntimeManager } from "./runtime-manager.js";
 import { getNomsodVersion } from "../shared/version.js";
 import { serveDistribution } from "./distribution.js";
 
+function isTailscaleIpv4(address: string): boolean {
+  const parts = address.split(".").map(Number);
+  return (
+    parts.length === 4 &&
+    parts.every(part => Number.isInteger(part) && part >= 0 && part <= 255) &&
+    parts[0] === 100 &&
+    parts[1] >= 64 &&
+    parts[1] <= 127
+  );
+}
+
+function detectTailscaleIpv4(): string {
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries || []) {
+      if (entry.family === "IPv4" && !entry.internal && isTailscaleIpv4(entry.address)) {
+        return entry.address;
+      }
+    }
+  }
+  return "";
+}
 const root = process.cwd();
 const version = getNomsodVersion(root);
 const host = process.env.NOMSOD_GATEWAY_HOST || "127.0.0.1";
 const port = Number(process.env.NOMSOD_GATEWAY_PORT || 3219);
+const peerHost = (process.env.NOMSOD_PEER_HOST || detectTailscaleIpv4()).trim();
+const peerPort = Number(process.env.NOMSOD_PEER_PORT || port + 5);
+const nodeName = process.env.NOMSOD_NODE_NAME || os.hostname();
 const controlPort = Number(process.env.NOMSOD_CONTROL_PORT || port + 2);
 const runtimePorts: [number, number] = [
   Number(process.env.NOMSOD_RUNTIME_PORT_A || port + 1),
   Number(process.env.NOMSOD_RUNTIME_PORT_B || port + 3)
 ];
 const pairingToken = process.env.NOMSOD_PAIRING_TOKEN || "";
-const ownerKey = process.env.NOMSOD_OWNER_KEY || "";
+const ownerKey = process.env.NOMSOD_OWNER_KEY || pairingToken;
 const publicBase = (process.env.NOMSOD_PUBLIC_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
 const controlKey = "nsc_" + randomBytes(32).toString("base64url");
 
@@ -191,11 +216,45 @@ publicServer.on("upgrade", (req, socket, head) => {
   hub.handleUpgrade(req, socket, head);
 });
 
+let peerServer: http.Server | undefined;
+if (peerHost) {
+  peerServer = http.createServer((req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+    if (req.method === "GET" && url.pathname === "/health") {
+      sendJson(res, 200, {
+        ok: true,
+        service: "nomsod-peer",
+        version,
+        gatewayNode: nodeName,
+        connectedDevices: hub.listDevices().length
+      });
+      return;
+    }
+
+    sendJson(res, 404, { error: "not_found" });
+  });
+
+  peerServer.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    if (url.pathname !== "/agent") {
+      socket.destroy();
+      return;
+    }
+    hub.handleUpgrade(req, socket, head);
+  });
+
+  peerServer.listen(peerPort, peerHost, () => {
+    console.log(`[supervisor] peer agent endpoint: ws://${peerHost}:${peerPort}/agent`);
+  });
+}
+
 publicServer.keepAliveTimeout = 65_000;
 publicServer.headersTimeout = 70_000;
 publicServer.requestTimeout = 310_000;
 
 publicServer.listen(port, host, () => {
+  console.log(`[supervisor] node=${nodeName}`);
   console.log(`[supervisor] Nomsod MCP public gateway: http://${host}:${port}`);
   console.log(`[supervisor] public MCP endpoint: ${publicBase}/mcp`);
   console.log(`[supervisor] agent endpoint: ws://${host}:${port}/agent`);
@@ -212,7 +271,14 @@ async function shutdown(): Promise<void> {
 
   await Promise.all([
     new Promise<void>(resolve => publicServer.close(() => resolve())),
-    new Promise<void>(resolve => controlServer.close(() => resolve()))
+    new Promise<void>(resolve => controlServer.close(() => resolve())),
+    new Promise<void>(resolve => {
+      if (!peerServer) {
+        resolve();
+        return;
+      }
+      peerServer.close(() => resolve());
+    })
   ]);
 }
 

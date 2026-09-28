@@ -1,16 +1,8 @@
-import { createHash, timingSafeEqual, randomBytes } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { OAuthStore } from "./oauth-store.js";
 
-interface AuthCodeRecord {
-  clientId: string;
-  redirectUri: string;
-  codeChallenge: string;
-  scope: string;
-  resource: string;
-  expiresAt: number;
-}
 
 function htmlEscape(value: string): string {
   return value
@@ -57,8 +49,21 @@ function validRedirectUri(value: string): boolean {
   }
 }
 
+function trustedLegacyChatGptClient(clientId: string, redirectUri: string): boolean {
+  if (!clientId.startsWith("nmc_")) return false;
+
+  try {
+    const url = new URL(redirectUri);
+    if (url.protocol !== "https:") return false;
+
+    const host = url.hostname.toLowerCase();
+    return host === "chatgpt.com" || host.endsWith(".chatgpt.com");
+  } catch {
+    return false;
+  }
+}
 export class OAuthService {
-  private readonly authCodes = new Map<string, AuthCodeRecord>();
+
 
   constructor(
     private readonly publicBase: string,
@@ -113,7 +118,7 @@ export class OAuthService {
         scopes_supported: ["mcp", "offline_access"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
-        authorization_response_iss_parameter_supported: false
+        authorization_response_iss_parameter_supported: true
       });
       return true;
     }
@@ -157,7 +162,8 @@ export class OAuthService {
       const resource = url.searchParams.get("resource") || `${this.publicBase}/mcp`;
 
       const client = await this.store.getClient(clientId);
-      if (!client || !client.redirectUris.includes(redirectUri)) {
+      const legacyClientAllowed = !client && trustedLegacyChatGptClient(clientId, redirectUri);
+      if ((!client && !legacyClientAllowed) || (client && !client.redirectUris.includes(redirectUri))) {
         json(res, 400, { error: "invalid_request", error_description: "Unknown client or redirect URI" });
         return true;
       }
@@ -227,7 +233,10 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
         return true;
       }
 
-      const client = await this.store.getClient(clientId);
+      let client = await this.store.getClient(clientId);
+      if (!client && trustedLegacyChatGptClient(clientId, redirectUri)) {
+        client = await this.store.adoptLegacyClient(clientId, redirectUri);
+      }
       if (!client || !client.redirectUris.includes(redirectUri) || !codeChallenge) {
         json(res, 400, { error: "invalid_request" });
         return true;
@@ -237,8 +246,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
         return true;
       }
 
-      const code = "nmc_code_" + randomBytes(24).toString("base64url");
-      this.authCodes.set(code, {
+      const code = await this.store.issueAuthorizationCode({
         clientId,
         redirectUri,
         codeChallenge,
@@ -306,9 +314,8 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       }
 
       const code = params.get("code") || "";
-      const record = this.authCodes.get(code);
-      if (!record || record.expiresAt <= Date.now()) {
-        this.authCodes.delete(code);
+      const record = await this.store.consumeAuthorizationCode(code);
+      if (!record) {
         json(res, 400, { error: "invalid_grant" });
         return true;
       }
@@ -331,7 +338,6 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
         return true;
       }
 
-      this.authCodes.delete(code);
       const tokens = await this.store.issueTokens(record.clientId, record.scope, record.resource);
       json(res, 200, {
         access_token: tokens.accessToken,

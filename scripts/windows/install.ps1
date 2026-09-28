@@ -171,9 +171,6 @@ function Install-Task {
   }
 }
 
-if (-not $DryRun -and $Mode -in @("Both", "Supervisor") -and -not (Test-IsAdministrator)) {
-  throw "Supervisor installation requires an elevated PowerShell window because it creates a boot task under LocalSystem."
-}
 
 if ($SkipConfigCheck -and -not $DryRun) {
   throw "-SkipConfigCheck is allowed only with -DryRun."
@@ -264,24 +261,47 @@ $supervisorArgs = $Quote + "dist\bootstrap\supervisor.js" + $Quote
 $agentArgs = $Quote + "dist\bootstrap\agent.js" + $Quote
 
 if ($Mode -in @("Both", "Supervisor")) {
-  $supervisorTrigger = @"
+  if (Test-IsAdministrator) {
+    $supervisorTrigger = @"
 <BootTrigger>
   <Enabled>true</Enabled>
   <Delay>PT5S</Delay>
 </BootTrigger>
 "@
 
-  $systemPrincipal = @"
+    $supervisorPrincipal = @"
 <Principal id="Author">
   <UserId>S-1-5-18</UserId>
   <RunLevel>HighestAvailable</RunLevel>
 </Principal>
 "@
 
+    $supervisorDescription = "Nomsod MCP Supervisor - machine-level connection and runtime guardian"
+  } else {
+    $sidXml = Escape-Xml $CurrentSid
+    $supervisorTrigger = @"
+<LogonTrigger>
+  <Enabled>true</Enabled>
+  <UserId>$sidXml</UserId>
+</LogonTrigger>
+"@
+
+    $supervisorPrincipal = @"
+<Principal id="Author">
+  <UserId>$sidXml</UserId>
+  <LogonType>InteractiveToken</LogonType>
+  <RunLevel>LeastPrivilege</RunLevel>
+</Principal>
+"@
+
+    $supervisorDescription = "Nomsod MCP Supervisor - user-session gateway and runtime guardian"
+    Write-Warning "Supervisor installed as a user-level background task because PowerShell is not elevated."
+  }
+
   $params = @{
-    Description = "Nomsod MCP Supervisor - machine-level connection and runtime guardian"
+    Description = $supervisorDescription
     TriggerXml = $supervisorTrigger
-    PrincipalXml = $systemPrincipal
+    PrincipalXml = $supervisorPrincipal
     Command = $supervisorNode
     Arguments = $supervisorArgs
     WorkingDirectory = $Root
@@ -383,9 +403,13 @@ $params = @{
 }
 Install-Task "NomsodMCP-Updater" (New-TaskXml @params)
 
-if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
+if ($Mode -in @("Both", "Supervisor", "Agent")) {
   $watchdogScript = Join-Path $Root "scripts\windows\watchdog.ps1"
   $watchdogTrigger = @"
+<LogonTrigger>
+  <Enabled>true</Enabled>
+  <UserId>$sidXml</UserId>
+</LogonTrigger>
 <TimeTrigger>
   <Repetition>
     <Interval>PT1M</Interval>
@@ -396,29 +420,36 @@ if ($Mode -in @("Both", "Supervisor") -or (Test-IsAdministrator)) {
 </TimeTrigger>
 "@
 
-  $systemPrincipal = @"
+  if (Test-IsAdministrator) {
+    $watchdogPrincipal = @"
 <Principal id="Author">
   <UserId>S-1-5-18</UserId>
   <RunLevel>HighestAvailable</RunLevel>
 </Principal>
 "@
+  } else {
+    $watchdogPrincipal = @"
+<Principal id="Author">
+  <UserId>$sidXml</UserId>
+  <LogonType>InteractiveToken</LogonType>
+  <RunLevel>LeastPrivilege</RunLevel>
+</Principal>
+"@
+  }
 
   $watchdogArgs = $Quote + $watchdogScript + $Quote + " " + $Quote + $Root + $Quote
 
   $params = @{
     Description = "Nomsod MCP watchdog - restarts unhealthy Supervisor/Agent scheduled tasks"
     TriggerXml = $watchdogTrigger
-    PrincipalXml = $systemPrincipal
+    PrincipalXml = $watchdogPrincipal
     Command = $backgroundExe
     Arguments = $watchdogArgs
     WorkingDirectory = $Root
   }
 
   Install-Task "NomsodMCP-Watchdog" (New-TaskXml @params)
-} elseif ($Mode -eq "Agent") {
-  Write-Warning "Agent installed without the machine-level watchdog because PowerShell is not elevated. Task Scheduler will still restart the Agent when its process exits."
 }
-
 $tunnelId = Get-DotEnvValue "NOMSOD_TUNNEL_ID"
 if ($tunnelId) {
   $tunnelInstaller = Join-Path $Root "scripts\windows\install-cloudflared-background.ps1"
