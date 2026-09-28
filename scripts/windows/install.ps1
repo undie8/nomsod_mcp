@@ -219,7 +219,10 @@ if (-not $DryRun) {
 
   # The tray executable is locked while running on Windows. Stop only the
   # Control UI; the Supervisor/Agent continue running during this rebuild.
-  & schtasks.exe /End /TN "NomsodMCP-Control" 1>$null 2>$null
+  $controlTask = Get-ScheduledTask -TaskName "NomsodMCP-Control" -ErrorAction SilentlyContinue
+  if ($controlTask) {
+    Stop-ScheduledTask -TaskName "NomsodMCP-Control" -ErrorAction SilentlyContinue
+  }
   Get-Process -Name "Nomsod MCP Control" -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 300
