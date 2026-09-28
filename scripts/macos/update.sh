@@ -11,12 +11,35 @@ fi
 LOCK_DIR="$ROOT/data/update.lock"
 LOG_DIR="$ROOT/data/logs"
 LOG_FILE="$LOG_DIR/updater.log"
+TMP=
+UPDATE_STARTED=0
+UPDATE_COMMITTED=0
+HAD_VERSION=0
+CURRENT=0.0.0
 mkdir -p "$LOG_DIR"
 
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   exit 0
 fi
-trap 'rm -rf "$LOCK_DIR"' EXIT HUP INT TERM
+
+cleanup() {
+  STATUS=$?
+  trap - EXIT HUP INT TERM
+
+  if [ "$UPDATE_STARTED" = "1" ] && [ "$UPDATE_COMMITTED" != "1" ]; then
+    if [ "$HAD_VERSION" = "1" ]; then
+      printf '%s\n' "$CURRENT" > "$ROOT/VERSION"
+    else
+      rm -f "$ROOT/VERSION"
+    fi
+    log "update rolled back version marker to $CURRENT"
+  fi
+
+  if [ -n "$TMP" ]; then rm -rf "$TMP"; fi
+  rm -rf "$LOCK_DIR"
+  exit "$STATUS"
+}
+trap cleanup EXIT HUP INT TERM
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$LOG_FILE"
@@ -41,13 +64,12 @@ version_gt() {
   return 1
 }
 
-CURRENT=0.0.0
 if [ -f "$ROOT/VERSION" ]; then
+  HAD_VERSION=1
   CURRENT=$(tr -d ' \r\n\t' < "$ROOT/VERSION")
 fi
 
 TMP=$(mktemp -d "$ROOT/data/update.XXXXXX")
-trap 'rm -rf "$TMP" "$LOCK_DIR"' EXIT HUP INT TERM
 
 MANIFEST="$TMP/manifest.json"
 /usr/bin/curl -fsSL --retry 3 --connect-timeout 10   -H 'Cache-Control: no-cache'   "$MANIFEST_URL?t=$(date +%s)"   -o "$MANIFEST"
@@ -95,6 +117,8 @@ if [ ! -f "$RELEASE_ROOT/VERSION" ]; then
   fi
 fi
 
+UPDATE_STARTED=1
+
 for item in "$RELEASE_ROOT"/* "$RELEASE_ROOT"/.[!.]* "$RELEASE_ROOT"/..?*; do
   [ -e "$item" ] || continue
   name=$(basename "$item")
@@ -104,6 +128,10 @@ for item in "$RELEASE_ROOT"/* "$RELEASE_ROOT"/.[!.]* "$RELEASE_ROOT"/..?*; do
   rm -rf "$ROOT/$name"
   cp -R "$item" "$ROOT/$name"
 done
+
+# Archives published from Windows do not preserve Unix executable bits.
+# Restore them before install.sh invokes helper scripts directly.
+chmod +x "$ROOT/scripts/macos/"*.sh
 
 ROLE=agent
 if [ -f "$ROOT/data/install-role.txt" ]; then
@@ -115,4 +143,12 @@ case "$ROLE" in
 esac
 
 NOMSOD_UPDATE_IN_PROGRESS=1 /bin/sh "$ROOT/scripts/macos/install.sh" "$ROLE"
+
+INSTALLED=$(tr -d ' \r\n\t' < "$ROOT/VERSION")
+if [ "$INSTALLED" != "$LATEST" ]; then
+  log "ERROR installed version mismatch expected=$LATEST actual=$INSTALLED"
+  exit 5
+fi
+
+UPDATE_COMMITTED=1
 log "update complete version=$LATEST"

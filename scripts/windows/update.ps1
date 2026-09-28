@@ -17,7 +17,10 @@ try {
   if (-not $hasLock) { exit 0 }
 
   $versionFile = Join-Path $Root "VERSION"
-  $current = if (Test-Path $versionFile) { ([IO.File]::ReadAllText($versionFile)).Trim() } else { "0.0.0" }
+  $hadVersionFile = Test-Path $versionFile
+  $current = if ($hadVersionFile) { ([IO.File]::ReadAllText($versionFile)).Trim() } else { "0.0.0" }
+  $updateStarted = $false
+  $updateCommitted = $false
 
   $headers = @{
     "Cache-Control" = "no-cache"
@@ -71,6 +74,8 @@ try {
         throw "Release package does not contain VERSION."
       }
     }
+
+    $updateStarted = $true
 
     $controlTask = "NomsodMCP-Control"
     & schtasks.exe /End /TN $controlTask 1>$null 2>$null
@@ -132,11 +137,27 @@ try {
       Restart-NomsodTask "NomsodMCP-Supervisor"
     }
 
+    $installedVersion = if (Test-Path $versionFile) { ([IO.File]::ReadAllText($versionFile)).Trim() } else { "" }
+    if ($installedVersion -ne [string]$manifest.version) {
+      throw "Installed version mismatch. Expected $($manifest.version), got $installedVersion"
+    }
+
+    $updateCommitted = $true
     Add-Content -Encoding UTF8 -Path $log -Value ("[{0}] update complete version={1}" -f [DateTime]::UtcNow.ToString("o"), $manifest.version)
   } finally {
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
   }
 } catch {
+  if ($updateStarted -and -not $updateCommitted) {
+    try {
+      if ($hadVersionFile) {
+        [IO.File]::WriteAllText($versionFile, $current + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+      } else {
+        Remove-Item $versionFile -Force -ErrorAction SilentlyContinue
+      }
+    } catch {}
+  }
+
   try {
     $logDir = Join-Path $Root "data\logs"
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
