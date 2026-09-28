@@ -72,6 +72,10 @@ namespace NomsodMcpControl
             enrollMenu.DropDownItems.Add(enrollMac);
             menu.Items.Add(enrollMenu);
 
+            var exportRecovery = new ToolStripMenuItem("Export recovery kit...");
+            exportRecovery.Click += delegate { ExportRecoveryKit(); };
+            menu.Items.Add(exportRecovery);
+
             var copyUrlItem = new ToolStripMenuItem("Copy MCP URL");
             copyUrlItem.Click += delegate {
                 Clipboard.SetText(GetPublicMcpUrl());
@@ -298,6 +302,66 @@ namespace NomsodMcpControl
                     MessageBoxIcon.Error
                 );
             }
+        }
+
+        private void ExportRecoveryKit()
+        {
+            try
+            {
+                var warning = MessageBox.Show(
+                    "The recovery kit contains the credentials needed to restore your Nomsod cluster even if every Nomsod computer is wiped.\r\n\r\nAnyone who obtains this file can restore the cluster. Save it only to protected external storage.\r\n\r\nCreate the recovery kit now?",
+                    "Nomsod MCP - Sensitive Recovery Kit",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning
+                );
+                if (warning != DialogResult.Yes) return;
+
+                using (var dialog = new SaveFileDialog())
+                {
+                    dialog.Title = "Save Nomsod MCP Recovery Kit";
+                    dialog.Filter = "ZIP archive (*.zip)|*.zip";
+                    dialog.FileName = "Nomsod-Recovery-Kit-SENSITIVE.zip";
+                    dialog.OverwritePrompt = true;
+
+                    if (dialog.ShowDialog() != DialogResult.OK) return;
+
+                    string script = Path.Combine(root, "scripts", "recovery", "export.ps1");
+                    if (!File.Exists(script))
+                        throw new FileNotFoundException("Recovery exporter is not installed.", script);
+
+                    string args =
+                        "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
+                        QuoteArg(script) +
+                        " -Root " + QuoteArg(root) +
+                        " -Destination " + QuoteArg(dialog.FileName) +
+                        " -Force";
+
+                    int code = RunHidden("powershell.exe", args, 120000);
+                    if (code != 0)
+                        throw new InvalidOperationException("Recovery exporter failed with exit code " + code + ".");
+
+                    MessageBox.Show(
+                        "Recovery kit created.\r\n\r\nStore this ZIP outside Nomsod computers. It is a sensitive credential backup and is the file used to restore the same cluster when no old machine is available.",
+                        "Nomsod MCP",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Could not export recovery kit.\r\n\r\n" + ex.Message,
+                    "Nomsod MCP",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
+        private static string QuoteArg(string value)
+        {
+            return "\"" + (value ?? "").Replace("\"", "\\\"") + "\"";
         }
 
         private string GetEnv(string key, string fallback)

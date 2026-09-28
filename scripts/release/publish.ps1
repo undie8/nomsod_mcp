@@ -71,6 +71,7 @@ function Copy-SharedFiles([string]$stage) {
   Copy-Item (Join-Path $Root "src") (Join-Path $stage "src") -Recurse -Force
   Copy-Item (Join-Path $Root "assets") (Join-Path $stage "assets") -Recurse -Force
   New-Item -ItemType Directory -Force -Path (Join-Path $stage "scripts") | Out-Null
+  Copy-Item (Join-Path $Root "scripts\recovery") (Join-Path $stage "scripts\recovery") -Recurse -Force
 }
 
 $windowsStage = Join-Path $stageRoot "windows"

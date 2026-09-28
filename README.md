@@ -328,7 +328,9 @@ This deployment is a **single-owner, single-cluster** network. The stable logica
 
 To add a computer, use **Nomsod MCP Control -> Add new computer** on any online node and copy the generated Windows or macOS install command. The command contains a signed short-lived enrollment invite and pins `NOMSOD_CLUSTER_ID` to the existing cluster. The invite expires after 10 minutes.
 
-Running the public bootstrap without an enrollment invite now fails closed instead of prompting for new pairing/owner secrets. This prevents an offline existing network from being mistaken for a new network and prevents accidental split-brain creation. A hidden recovery mode exists only for controlled restoration with the existing cluster credentials; it never generates a second cluster identity.
+Running the public bootstrap without an enrollment invite fails closed instead of prompting for new pairing/owner secrets. This prevents an offline existing network from being mistaken for a new network and prevents accidental split-brain creation. Recovery never generates a second cluster identity.
+
+For total-loss recovery, Nomsod Control can export a **Recovery Kit** ZIP. The kit is self-contained for Nomsod itself: it carries both platform release archives, both bootstrap installers, the stable `nomsod-main-v1` cluster credentials, and the existing Cloudflare tunnel credential. After every Nomsod computer has been wiped or is unavailable, a new Windows or macOS machine can restore the same cluster from that ZIP without contacting any old Nomsod node or requiring `mcp.nomsod.net` to be online first. The recovery bootstrap verifies the bundled release SHA-256 before installation, recreates the same Gateway + Agent configuration, and brings the existing public tunnel back online. The ZIP is therefore a sensitive owner credential backup and must be stored outside Nomsod computers on protected storage.
 
 Computer identity and display name are created at runtime; no machine name is hardcoded.
 
@@ -337,7 +339,7 @@ Default installation locations:
 - Windows: `%LOCALAPPDATA%\Nomsod MCP`
 - macOS: `~/Library/Application Support/Nomsod MCP`
 
-The installed Control UI uses the Nomsod cat icon on the Windows notification area and macOS menu bar. It shows status, device identity, Gateway/MCP URL, version, restart controls and a confirmation-gated **Reveal keys** action. Quitting the Control UI does not stop the Supervisor or Agent.
+The installed Control UI uses the Nomsod cat icon on the Windows notification area and macOS menu bar. It shows status, device identity, Gateway/MCP URL, version, restart controls, a confirmation-gated **Reveal keys** action, normal **Add new computer** enrollment, and **Export recovery kit…** for total-loss recovery. Quitting the Control UI does not stop the Supervisor or Agent.
 
 ### Runtime process names
 

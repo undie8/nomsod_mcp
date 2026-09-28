@@ -92,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enroll.submenu = enrollMenu
         menu.addItem(enroll)
 
+        let recovery = NSMenuItem(title: "Export recovery kit…", action: #selector(exportRecoveryKit), keyEquivalent: "")
+        recovery.target = self
+        menu.addItem(recovery)
+
         let copyUrl = NSMenuItem(title: "Copy MCP URL", action: #selector(copyMcpUrl), keyEquivalent: "")
         copyUrl.target = self
         menu.addItem(copyUrl)
@@ -441,6 +445,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             showEnrollmentError(error.localizedDescription)
         }
+    }
+
+    @objc private func exportRecoveryKit() {
+        let confirm = NSAlert()
+        confirm.messageText = "Create sensitive recovery kit?"
+        confirm.informativeText = "This ZIP can restore the same Nomsod cluster even if every Nomsod computer is wiped. Anyone who obtains it can restore the cluster. Save it only to protected external storage."
+        confirm.alertStyle = .warning
+        confirm.addButton(withTitle: "Export")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "Save Nomsod MCP Recovery Kit"
+        panel.nameFieldStringValue = "Nomsod-Recovery-Kit-SENSITIVE.zip"
+        panel.allowedContentTypes = []
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url?.path else { return }
+
+        let script = repoRoot + "/scripts/recovery/export.sh"
+        guard FileManager.default.fileExists(atPath: script) else {
+            showEnrollmentError("Recovery exporter is not installed.")
+            return
+        }
+
+        let code = run("/bin/sh", [script, repoRoot, destination])
+        if code != 0 {
+            showEnrollmentError("Recovery exporter failed with exit code \(code).")
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Recovery kit created"
+        alert.informativeText = "Store this ZIP outside Nomsod computers. It is the credential backup used to restore the same cluster when no old machine is available."
+        alert.runModal()
     }
 
     private func readControlKey() -> String? {

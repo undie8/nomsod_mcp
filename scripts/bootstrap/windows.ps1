@@ -10,6 +10,7 @@ param(
   [string]$ClusterId = "",
   [string]$DeviceName = "",
   [string]$EnrollmentToken = "",
+  [string]$RecoveryBundleRoot = "",
   [switch]$PrepareOnly,
   [switch]$RecoveryMode
 )
@@ -89,6 +90,9 @@ function Ensure-Cloudflared([string]$Root) {
 if (-not $EnrollmentToken -and $env:NOMSOD_ENROLLMENT_TOKEN) {
   $EnrollmentToken = $env:NOMSOD_ENROLLMENT_TOKEN
 }
+if (-not $RecoveryBundleRoot -and $env:NOMSOD_RECOVERY_ROOT) {
+  $RecoveryBundleRoot = $env:NOMSOD_RECOVERY_ROOT
+}
 
 $EnrollmentBundle = $null
 $GatewayPort = 34100
@@ -96,6 +100,56 @@ $PeerPort = 34104
 $CloudflareTunnelId = ""
 $CloudflareCredentialsBase64 = ""
 $CloudflareHealthUrl = ""
+$RecoveryDistribution = ""
+
+if ($RecoveryBundleRoot) {
+  $RecoveryBundleRoot = [IO.Path]::GetFullPath($RecoveryBundleRoot)
+  $recoveryFile = Join-Path $RecoveryBundleRoot "recovery.json"
+  if (-not (Test-Path $recoveryFile)) {
+    throw "Recovery kit is incomplete: recovery.json is missing."
+  }
+
+  $RecoveryBundle = [IO.File]::ReadAllText($recoveryFile) | ConvertFrom-Json
+  if ([int]$RecoveryBundle.version -ne 1 -or [string]$RecoveryBundle.kind -ne "nomsod-single-cluster-recovery") {
+    throw "Unsupported Nomsod MCP recovery kit format."
+  }
+
+  $recoveryClusterId = [string]$RecoveryBundle.clusterId
+  if (-not $recoveryClusterId -or $recoveryClusterId -ne $ExpectedClusterId) {
+    throw "Recovery cluster mismatch. Expected '$ExpectedClusterId', got '$recoveryClusterId'."
+  }
+
+  $PairingKey = [string]$RecoveryBundle.pairingToken
+  $OwnerKey = [string]$RecoveryBundle.ownerKey
+  $ClusterKey = [string]$RecoveryBundle.clusterKey
+  if (-not $PairingKey -or -not $OwnerKey -or -not $ClusterKey) {
+    throw "Recovery kit does not contain the existing cluster credentials."
+  }
+
+  $ClusterId = $recoveryClusterId
+  $PublicBaseUrl = ([string]$RecoveryBundle.publicBaseUrl).TrimEnd("/")
+  $GatewayPort = [int]$RecoveryBundle.gatewayPort
+  $PeerPort = [int]$RecoveryBundle.peerPort
+  if (-not $GatewayPort) { $GatewayPort = 34100 }
+  if (-not $PeerPort) { $PeerPort = 34104 }
+
+  if ($RecoveryBundle.cloudflare) {
+    $CloudflareTunnelId = [string]$RecoveryBundle.cloudflare.tunnelId
+    $CloudflareCredentialsBase64 = [string]$RecoveryBundle.cloudflare.credentialsBase64
+    $CloudflareHealthUrl = [string]$RecoveryBundle.cloudflare.healthUrl
+  }
+  if (-not $CloudflareTunnelId -or -not $CloudflareCredentialsBase64) {
+    throw "Recovery kit does not contain the public tunnel credential."
+  }
+
+  $RecoveryDistribution = Join-Path $RecoveryBundleRoot "distribution"
+  if (-not (Test-Path $RecoveryDistribution)) {
+    throw "Recovery kit is incomplete: distribution directory is missing."
+  }
+
+  $RecoveryMode = $true
+  Write-Host "Recovery kit accepted. Restoring existing cluster $ClusterId without contacting an old Nomsod computer."
+}
 
 if (-not $EnrollmentToken -and -not $RecoveryMode) {
   throw "Nomsod MCP has one existing cluster. This installer cannot create a second cluster. Use Add new computer on any online Nomsod node. If every node was wiped, use the single-cluster recovery procedure."
@@ -181,8 +235,15 @@ $headers = @{
   "User-Agent" = "Nomsod-MCP-Bootstrap"
 }
 
-Write-Host "Fetching Nomsod MCP release manifest..."
-$manifest = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri ($manifestUrl + "?t=" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+if ($RecoveryDistribution) {
+  Write-Host "Reading Nomsod MCP release manifest from recovery kit..."
+  $recoveryManifest = Join-Path $RecoveryDistribution "releases\latest\windows.json"
+  if (-not (Test-Path $recoveryManifest)) { throw "Recovery kit is missing the Windows release manifest." }
+  $manifest = [IO.File]::ReadAllText($recoveryManifest) | ConvertFrom-Json
+} else {
+  Write-Host "Fetching Nomsod MCP release manifest..."
+  $manifest = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri ($manifestUrl + "?t=" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+}
 if (-not $manifest.version -or -not $manifest.url -or -not $manifest.sha256) {
   throw "Invalid Nomsod MCP release manifest."
 }
@@ -193,8 +254,16 @@ $stage = Join-Path $temp "stage"
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 try {
-  Write-Host "Downloading Nomsod MCP $($manifest.version)..."
-  Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri ([string]$manifest.url) -OutFile $archive
+  if ($RecoveryDistribution) {
+    $artifactName = [IO.Path]::GetFileName(([Uri][string]$manifest.url).AbsolutePath)
+    $recoveryArchive = Join-Path $RecoveryDistribution ("releases\" + [string]$manifest.version + "\" + $artifactName)
+    if (-not (Test-Path $recoveryArchive)) { throw "Recovery kit is missing the Windows release archive." }
+    Write-Host "Loading Nomsod MCP $($manifest.version) from recovery kit..."
+    Copy-Item $recoveryArchive $archive -Force
+  } else {
+    Write-Host "Downloading Nomsod MCP $($manifest.version)..."
+    Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri ([string]$manifest.url) -OutFile $archive
+  }
 
   $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
   $expected = ([string]$manifest.sha256).ToLowerInvariant()
@@ -214,6 +283,12 @@ try {
   }
 
   New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+
+  if ($RecoveryDistribution) {
+    $localDistribution = Join-Path $InstallRoot "data\distribution"
+    New-Item -ItemType Directory -Force -Path $localDistribution | Out-Null
+    Copy-Item (Join-Path $RecoveryDistribution "*") $localDistribution -Recurse -Force
+  }
 
   Get-ChildItem $releaseRoot -Force | ForEach-Object {
     $target = Join-Path $InstallRoot $_.Name
@@ -302,7 +377,7 @@ try {
     return
   }
 
-  if ($Role -in @("Supervisor", "Both")) {
+  if ($Role -in @("Supervisor", "Both") -and -not $RecoveryDistribution) {
     $syncScript = Join-Path $InstallRoot "scripts\windows\sync-distribution.ps1"
     if (Test-Path $syncScript) {
       try {
@@ -325,6 +400,9 @@ try {
   Write-Host "MCP: $($PublicBaseUrl.TrimEnd('/'))/mcp"
   if ($EnrollmentToken) {
     Write-Host "Enrollment: complete"
+  }
+  if ($RecoveryDistribution) {
+    Write-Host "Recovery: existing cluster restored"
   }
 } finally {
   Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

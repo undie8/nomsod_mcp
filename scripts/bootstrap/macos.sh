@@ -12,6 +12,8 @@ CLUSTER_ID=${NOMSOD_CLUSTER_ID:-nomsod-main-v1}
 DEVICE_NAME=${NOMSOD_DEVICE_NAME:-}
 ENROLLMENT_TOKEN=${NOMSOD_ENROLLMENT_TOKEN:-}
 RECOVERY_MODE=${NOMSOD_RECOVERY_MODE:-0}
+RECOVERY_ROOT=${NOMSOD_RECOVERY_ROOT:-}
+PREPARE_ONLY=${NOMSOD_PREPARE_ONLY:-0}
 GATEWAY_PORT=34100
 PEER_PORT=34104
 GATEWAY_WS_LIST=$GATEWAY_WS
@@ -41,6 +43,56 @@ read_secret() {
   fi
   printf '%s' "$VALUE"
 }
+
+RECOVERY_DISTRIBUTION=
+if [ -n "$RECOVERY_ROOT" ]; then
+  RECOVERY_ROOT=$(cd "$RECOVERY_ROOT" && pwd)
+  RECOVERY_JSON="$RECOVERY_ROOT/recovery.json"
+  [ -f "$RECOVERY_JSON" ] || { echo "Recovery kit is incomplete: recovery.json is missing." >&2; exit 10; }
+
+  recovery_value() {
+    /usr/bin/plutil -extract "$1" raw -o - "$RECOVERY_JSON" 2>/dev/null || true
+  }
+
+  RECOVERY_VERSION=$(recovery_value version)
+  RECOVERY_KIND=$(recovery_value kind)
+  RECOVERY_CLUSTER_ID=$(recovery_value clusterId)
+  [ "$RECOVERY_VERSION" = "1" ] && [ "$RECOVERY_KIND" = "nomsod-single-cluster-recovery" ] || {
+    echo "Unsupported Nomsod MCP recovery kit format." >&2
+    exit 11
+  }
+  [ -n "$RECOVERY_CLUSTER_ID" ] && [ "$RECOVERY_CLUSTER_ID" = "$CLUSTER_ID" ] || {
+    echo "Recovery cluster mismatch. Expected $CLUSTER_ID, got $RECOVERY_CLUSTER_ID." >&2
+    exit 12
+  }
+
+  PAIRING_KEY=$(recovery_value pairingToken)
+  OWNER_KEY=$(recovery_value ownerKey)
+  CLUSTER_KEY=$(recovery_value clusterKey)
+  PUBLIC_BASE=$(recovery_value publicBaseUrl)
+  GATEWAY_PORT=$(recovery_value gatewayPort)
+  PEER_PORT=$(recovery_value peerPort)
+  CLOUDFLARE_TUNNEL_ID=$(recovery_value cloudflare.tunnelId)
+  CLOUDFLARE_CREDENTIALS_B64=$(recovery_value cloudflare.credentialsBase64)
+  CLOUDFLARE_HEALTH_URL=$(recovery_value cloudflare.healthUrl)
+
+  [ -n "$PAIRING_KEY" ] && [ -n "$OWNER_KEY" ] && [ -n "$CLUSTER_KEY" ] || {
+    echo "Recovery kit does not contain the existing cluster credentials." >&2
+    exit 13
+  }
+  [ -n "$CLOUDFLARE_TUNNEL_ID" ] && [ -n "$CLOUDFLARE_CREDENTIALS_B64" ] || {
+    echo "Recovery kit does not contain the public tunnel credential." >&2
+    exit 14
+  }
+
+  CLUSTER_ID=$RECOVERY_CLUSTER_ID
+  GATEWAY_PORT=${GATEWAY_PORT:-34100}
+  PEER_PORT=${PEER_PORT:-34104}
+  RECOVERY_DISTRIBUTION="$RECOVERY_ROOT/distribution"
+  [ -d "$RECOVERY_DISTRIBUTION" ] || { echo "Recovery kit is incomplete: distribution directory is missing." >&2; exit 15; }
+  RECOVERY_MODE=1
+  echo "Recovery kit accepted. Restoring existing cluster $CLUSTER_ID without contacting an old Nomsod computer."
+fi
 
 if [ -z "$ENROLLMENT_TOKEN" ] && [ "$RECOVERY_MODE" != "1" ]; then
   echo "Nomsod MCP has one existing cluster. This installer cannot create a second cluster." >&2
@@ -114,7 +166,13 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/nomsod-mcp-install.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
 MANIFEST="$TMP/manifest.json"
-/usr/bin/curl -fsSL --retry 3 --connect-timeout 10   -H 'Cache-Control: no-cache'   "$MANIFEST_URL?t=$(date +%s)"   -o "$MANIFEST"
+if [ -n "$RECOVERY_DISTRIBUTION" ]; then
+  RECOVERY_MANIFEST="$RECOVERY_DISTRIBUTION/releases/latest/macos.json"
+  [ -f "$RECOVERY_MANIFEST" ] || { echo "Recovery kit is missing the macOS release manifest." >&2; exit 16; }
+  cp "$RECOVERY_MANIFEST" "$MANIFEST"
+else
+  /usr/bin/curl -fsSL --retry 3 --connect-timeout 10 -H 'Cache-Control: no-cache' "$MANIFEST_URL?t=$(date +%s)" -o "$MANIFEST"
+fi
 
 manifest_value() {
   /usr/bin/plutil -extract "$1" raw -o - "$MANIFEST" 2>/dev/null || true
@@ -130,7 +188,15 @@ if [ -z "$VERSION" ] || [ -z "$URL" ] || [ -z "$EXPECTED" ]; then
 fi
 
 ARCHIVE="$TMP/release.tar.gz"
-/usr/bin/curl -fsSL --retry 3 --connect-timeout 15 "$URL" -o "$ARCHIVE"
+if [ -n "$RECOVERY_DISTRIBUTION" ]; then
+  ARTIFACT_NAME=$(basename "${URL%%\?*}")
+  RECOVERY_ARCHIVE="$RECOVERY_DISTRIBUTION/releases/$VERSION/$ARTIFACT_NAME"
+  [ -f "$RECOVERY_ARCHIVE" ] || { echo "Recovery kit is missing the macOS release archive." >&2; exit 17; }
+  echo "Loading Nomsod MCP $VERSION from recovery kit..."
+  cp "$RECOVERY_ARCHIVE" "$ARCHIVE"
+else
+  /usr/bin/curl -fsSL --retry 3 --connect-timeout 15 "$URL" -o "$ARCHIVE"
+fi
 ACTUAL=$(/usr/bin/shasum -a 256 "$ARCHIVE" | awk '{print $1}')
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "Release checksum mismatch." >&2
@@ -154,6 +220,11 @@ if [ ! -f "$RELEASE_ROOT/VERSION" ]; then
 fi
 
 mkdir -p "$INSTALL_ROOT"
+
+if [ -n "$RECOVERY_DISTRIBUTION" ]; then
+  mkdir -p "$INSTALL_ROOT/data/distribution"
+  cp -R "$RECOVERY_DISTRIBUTION"/. "$INSTALL_ROOT/data/distribution/"
+fi
 
 for item in "$RELEASE_ROOT"/* "$RELEASE_ROOT"/.[!.]* "$RELEASE_ROOT"/..?*; do
   [ -e "$item" ] || continue
@@ -212,7 +283,13 @@ if [ ! -f "$ENVFILE" ]; then
 fi
 
 chmod +x "$INSTALL_ROOT/scripts/macos/"*.sh
-if [ "$ROLE" = "supervisor" ] || [ "$ROLE" = "both" ]; then
+if [ "$PREPARE_ONLY" = "1" ]; then
+  echo ""
+  echo "Nomsod MCP recovery/enrollment prepared without installing services."
+  echo "Location: $INSTALL_ROOT"
+  exit 0
+fi
+if { [ "$ROLE" = "supervisor" ] || [ "$ROLE" = "both" ]; } && [ -z "$RECOVERY_DISTRIBUTION" ]; then
   echo "Synchronizing release mirror..."
   if ! /bin/sh "$INSTALL_ROOT/scripts/macos/sync-distribution.sh" "$INSTALL_ROOT" "$PUBLIC_BASE"; then
     echo "Warning: initial distribution mirror sync failed; federation remains available." >&2
@@ -343,4 +420,7 @@ fi
 echo ""
 echo "Nomsod MCP $VERSION installed."
 echo "Location: $INSTALL_ROOT"
-echo "MCP: https://mcp.nomsod.net/mcp"
+echo "MCP: ${PUBLIC_BASE%/}/mcp"
+if [ -n "$RECOVERY_DISTRIBUTION" ]; then
+  echo "Recovery: existing cluster restored"
+fi
