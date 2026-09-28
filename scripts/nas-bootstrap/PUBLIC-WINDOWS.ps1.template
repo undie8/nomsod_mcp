@@ -1,7 +1,13 @@
+param(
+  [switch]$ElevatedInstall
+)
+
 $ErrorActionPreference = "Stop"
 
 $SelfUrl = "__SELF_URL__"
 $BaseUrl = "__BASE_URL__"
+$LogPath = Join-Path $env:PUBLIC "Nomsod-MCP-Install.log"
+$Stage = "startup"
 
 function Test-IsAdministrator {
   $current = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -9,27 +15,59 @@ function Test-IsAdministrator {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Write-Stage([string]$Name) {
+  $script:Stage = $Name
+  Write-Host ("[Nomsod] " + $Name)
+}
+
 if (-not (Test-IsAdministrator)) {
+  Write-Host "[Nomsod] Administrator permission is required. Opening the installer as administrator..."
   $elevatedScript = Join-Path $env:TEMP ("nomsod-bootstrap-" + [guid]::NewGuid().ToString("N") + ".ps1")
-  Invoke-WebRequest -UseBasicParsing -Uri $SelfUrl -OutFile $elevatedScript
+  Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-store" } -Uri $SelfUrl -OutFile $elevatedScript
+
   try {
-    $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
-      "-NoLogo","-NoProfile","-ExecutionPolicy","Bypass","-File",$elevatedScript
-    )
-    exit $p.ExitCode
+    $argLine = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $elevatedScript + '" -ElevatedInstall'
+    $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $argLine
+    if ($p.ExitCode -ne 0) {
+      Write-Host ""
+      Write-Host "Nomsod MCP installation failed." -ForegroundColor Red
+      Write-Host ("Log: " + $LogPath) -ForegroundColor Yellow
+      if (Test-Path $LogPath) {
+        Write-Host ""
+        Write-Host "Last installer messages:" -ForegroundColor Yellow
+        Get-Content $LogPath -Tail 30 -ErrorAction SilentlyContinue
+      }
+    } else {
+      Write-Host ""
+      Write-Host "Nomsod MCP installation completed." -ForegroundColor Green
+    }
   } finally {
     Remove-Item $elevatedScript -Force -ErrorAction SilentlyContinue
   }
+  return
 }
 
+$transcriptStarted = $false
 $work = Join-Path $env:TEMP ("nomsod-public-bootstrap-" + [guid]::NewGuid().ToString("N"))
 $zip = Join-Path $work "bundle.zip"
 $bundle = Join-Path $work "bundle"
 
 try {
+  try {
+    Start-Transcript -Path $LogPath -Force | Out-Null
+    $transcriptStarted = $true
+  } catch {}
+
+  Write-Host ("Nomsod MCP installer started: " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
+  Write-Host ("Computer: " + $env:COMPUTERNAME)
+  Write-Host ("PowerShell: " + $PSVersionTable.PSVersion.ToString())
+  Write-Host ("Log: " + $LogPath)
+
+  Write-Stage "Downloading bootstrap bundle"
   New-Item -ItemType Directory -Force -Path $work,$bundle | Out-Null
-  Write-Host "Downloading Nomsod MCP bootstrap..."
   Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-store" } -Uri ($BaseUrl + "/bundle.zip") -OutFile $zip
+
+  Write-Stage "Extracting bootstrap bundle"
   Expand-Archive -LiteralPath $zip -DestinationPath $bundle -Force
 
   $bootstrap = Join-Path $bundle "distribution\install\windows.ps1"
@@ -37,10 +75,33 @@ try {
     throw "Downloaded Nomsod bootstrap bundle is incomplete."
   }
 
+  Write-Stage "Installing Nomsod MCP"
   & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $bootstrap -RecoveryBundleRoot $bundle
   if ($LASTEXITCODE -ne 0) {
     throw "Nomsod MCP installation failed with exit code $LASTEXITCODE."
   }
-} finally {
+
+  Write-Stage "Installation complete"
+  Write-Host ""
+  Write-Host "Nomsod MCP installation completed successfully." -ForegroundColor Green
+  Write-Host ("Log: " + $LogPath)
+}
+catch {
+  Write-Host ""
+  Write-Host "Nomsod MCP installation failed." -ForegroundColor Red
+  Write-Host ("Stage: " + $Stage) -ForegroundColor Red
+  Write-Host ("Error: " + $_.Exception.Message) -ForegroundColor Red
+  Write-Host ("Log: " + $LogPath) -ForegroundColor Yellow
+
+  if ($ElevatedInstall) {
+    Write-Host ""
+    [void](Read-Host "Press Enter to close this installer")
+  }
+  exit 1
+}
+finally {
   Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+  if ($transcriptStarted) {
+    try { Stop-Transcript | Out-Null } catch {}
+  }
 }
