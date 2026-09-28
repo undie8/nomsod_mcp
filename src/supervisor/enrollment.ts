@@ -11,8 +11,9 @@ interface EnrollmentInvitePayload {
 }
 
 export interface EnrollmentBootstrap {
-  version: 1;
+  version: 2;
   role: "both";
+  clusterId: string;
   publicBaseUrl: string;
   gatewayPort: number;
   peerPort: number;
@@ -34,6 +35,7 @@ export class EnrollmentService {
     private readonly publicBaseUrl: string,
     private readonly pairingToken: string,
     private readonly ownerKey: string,
+    private readonly clusterId: string,
     private readonly gatewayPort: number,
     private readonly peerPort: number
   ) {}
@@ -61,6 +63,8 @@ export class EnrollmentService {
     const quotedSh = token.replace(/'/g, "'\"'\"'");
     const publicPs = this.publicBaseUrl.replace(/'/g, "''");
     const publicSh = this.publicBaseUrl.replace(/'/g, "'\"'\"'");
+    const clusterPs = this.clusterId.replace(/'/g, "''");
+    const clusterSh = this.clusterId.replace(/'/g, "'\"'\"'");
 
     return {
       token,
@@ -69,11 +73,13 @@ export class EnrollmentService {
       windowsCommand:
         "$env:NOMSOD_ENROLLMENT_TOKEN='" + quotedPs +
         "'; $env:NOMSOD_PUBLIC_BASE_URL='" + publicPs +
+        "'; $env:NOMSOD_CLUSTER_ID='" + clusterPs +
         "'; irm " + this.publicBaseUrl + "/install/windows.ps1 | iex",
       macosCommand:
         "curl -fsSL " + this.publicBaseUrl +
         "/install/macos.sh | NOMSOD_ENROLLMENT_TOKEN='" + quotedSh +
-        "' NOMSOD_PUBLIC_BASE_URL='" + publicSh + "' sh"
+        "' NOMSOD_PUBLIC_BASE_URL='" + publicSh +
+        "' NOMSOD_CLUSTER_ID='" + clusterSh + "' sh"
     };
   }
 
@@ -92,8 +98,9 @@ export class EnrollmentService {
     }
 
     const bundle: EnrollmentBootstrap = {
-      version: 1,
+      version: 2,
       role: "both",
+      clusterId: this.clusterId,
       publicBaseUrl: this.publicBaseUrl,
       gatewayPort: this.gatewayPort,
       peerPort: this.peerPort,

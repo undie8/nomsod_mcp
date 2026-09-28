@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DeviceDescriptor } from "./protocol.js";
+import { resolveClusterId } from "./single-cluster.js";
 
 export interface StoredIdentity {
   deviceId: string;
@@ -37,6 +38,7 @@ export function buildDescriptor(deviceId: string, version: string): DeviceDescri
   const displayName = (process.env.NOMSOD_DEVICE_NAME || hostname).trim() || hostname;
   return {
     deviceId,
+    clusterId: resolveClusterId(),
     displayName,
     hostname,
     platform: process.platform,

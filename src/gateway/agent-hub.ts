@@ -27,6 +27,7 @@ export class AgentHub {
   constructor(
     private readonly registry: DeviceRegistry,
     private readonly pairingToken: string,
+    private readonly clusterId: string,
     private readonly requestTimeoutMs = 120_000
   ) {
     this.wss.on("connection", ws => this.onConnection(ws));
@@ -92,6 +93,11 @@ export class AgentHub {
         const device = hello.device;
         if (!device?.deviceId || !device?.displayName || !device?.platform) {
           ws.close(4004, "invalid device descriptor");
+          return;
+        }
+
+        if (device.clusterId && device.clusterId !== this.clusterId) {
+          ws.close(4006, "cluster mismatch");
           return;
         }
 

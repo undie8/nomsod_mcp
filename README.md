@@ -324,21 +324,13 @@ Set `NOMSOD_LOG_DIR` to use a different log location.
 
 Nomsod MCP publishes separate Windows and macOS release packages at `mcp.nomsod.net`. Each release has a semantic version and SHA-256 digest. Versioned package URLs are immutable; `releases/latest/*.json` only points clients at the newest package.
 
-A new computer can install the default **Agent + Control UI** directly from a terminal.
+This deployment is a **single-owner, single-cluster** network. The stable logical cluster ID is `nomsod-main-v1`; computers are disposable nodes inside that one network. Normal installation never creates another cluster.
 
-Windows PowerShell:
+To add a computer, use **Nomsod MCP Control -> Add new computer** on any online node and copy the generated Windows or macOS install command. The command contains a signed short-lived enrollment invite and pins `NOMSOD_CLUSTER_ID` to the existing cluster. The invite expires after 10 minutes.
 
-```powershell
-irm https://mcp.nomsod.net/install/windows.ps1 | iex
-```
+Running the public bootstrap without an enrollment invite now fails closed instead of prompting for new pairing/owner secrets. This prevents an offline existing network from being mistaken for a new network and prevents accidental split-brain creation. A hidden recovery mode exists only for controlled restoration with the existing cluster credentials; it never generates a second cluster identity.
 
-macOS Terminal:
-
-```sh
-curl -fsSL https://mcp.nomsod.net/install/macos.sh | sh
-```
-
-The installer prompts for the Nomsod pairing key without echoing it. Computer identity and display name are created at runtime; no machine name is hardcoded.
+Computer identity and display name are created at runtime; no machine name is hardcoded.
 
 Default installation locations:
 

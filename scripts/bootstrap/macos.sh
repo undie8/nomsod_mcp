@@ -8,8 +8,10 @@ PUBLIC_BASE=${NOMSOD_PUBLIC_BASE_URL:-https://mcp.nomsod.net}
 PAIRING_KEY=${NOMSOD_PAIRING_TOKEN:-}
 OWNER_KEY=${NOMSOD_OWNER_KEY:-}
 CLUSTER_KEY=${NOMSOD_CLUSTER_KEY:-}
+CLUSTER_ID=${NOMSOD_CLUSTER_ID:-nomsod-main-v1}
 DEVICE_NAME=${NOMSOD_DEVICE_NAME:-}
 ENROLLMENT_TOKEN=${NOMSOD_ENROLLMENT_TOKEN:-}
+RECOVERY_MODE=${NOMSOD_RECOVERY_MODE:-0}
 GATEWAY_PORT=34100
 PEER_PORT=34104
 GATEWAY_WS_LIST=$GATEWAY_WS
@@ -40,6 +42,23 @@ read_secret() {
   printf '%s' "$VALUE"
 }
 
+if [ -z "$ENROLLMENT_TOKEN" ] && [ "$RECOVERY_MODE" != "1" ]; then
+  echo "Nomsod MCP has one existing cluster. This installer cannot create a second cluster." >&2
+  echo "Use Add new computer on any online Nomsod node. If every node was wiped, use the single-cluster recovery procedure." >&2
+  exit 7
+fi
+
+if [ "$RECOVERY_MODE" = "1" ]; then
+  if [ -z "$PAIRING_KEY" ] || [ -z "$OWNER_KEY" ] || [ -z "$CLUSTER_KEY" ]; then
+    echo "Recovery mode requires the existing cluster pairing, owner and cluster keys. It never creates new cluster secrets." >&2
+    exit 8
+  fi
+  ROLE=both
+  GATEWAY_WS="ws://127.0.0.1:$GATEWAY_PORT/agent"
+  PUBLIC_GATEWAY_WS=$(printf '%s' "$PUBLIC_BASE" | sed -e 's#^https://#wss://#' -e 's#^http://#ws://#' -e 's#/$##')
+  GATEWAY_WS_LIST="$GATEWAY_WS,$PUBLIC_GATEWAY_WS/agent"
+fi
+
 if [ -n "$ENROLLMENT_TOKEN" ]; then
   echo "Joining Nomsod MCP cluster..."
   ENROLL_JSON=$(mktemp "${TMPDIR:-/tmp}/nomsod-enroll.XXXXXX")
@@ -56,6 +75,7 @@ if [ -n "$ENROLLMENT_TOKEN" ]; then
   PAIRING_KEY=$(enroll_value pairingToken)
   OWNER_KEY=$(enroll_value ownerKey)
   CLUSTER_KEY=$(enroll_value clusterKey)
+  ENROLLMENT_CLUSTER_ID=$(enroll_value clusterId)
   PUBLIC_BASE=$(enroll_value publicBaseUrl)
   GATEWAY_PORT=$(enroll_value gatewayPort)
   PEER_PORT=$(enroll_value peerPort)
@@ -64,11 +84,16 @@ if [ -n "$ENROLLMENT_TOKEN" ]; then
   CLOUDFLARE_HEALTH_URL=$(enroll_value cloudflare.healthUrl)
   rm -f "$ENROLL_JSON"
 
-  if [ -z "$PAIRING_KEY" ] || [ -z "$OWNER_KEY" ] || [ -z "$CLUSTER_KEY" ]; then
+  if [ -z "$PAIRING_KEY" ] || [ -z "$OWNER_KEY" ] || [ -z "$CLUSTER_KEY" ] || [ -z "$ENROLLMENT_CLUSTER_ID" ]; then
     echo "Enrollment response is incomplete." >&2
     exit 6
   fi
+  if [ "$ENROLLMENT_CLUSTER_ID" != "$CLUSTER_ID" ]; then
+    echo "Enrollment cluster mismatch. Expected $CLUSTER_ID, got $ENROLLMENT_CLUSTER_ID." >&2
+    exit 9
+  fi
 
+  CLUSTER_ID=$ENROLLMENT_CLUSTER_ID
   ROLE=both
   GATEWAY_WS="ws://127.0.0.1:$GATEWAY_PORT/agent"
   PUBLIC_GATEWAY_WS=$(printf '%s' "$PUBLIC_BASE" | sed -e 's#^https://#wss://#' -e 's#^http://#ws://#' -e 's#/$##')
@@ -144,6 +169,7 @@ ENVFILE="$INSTALL_ROOT/.env"
 if [ ! -f "$ENVFILE" ]; then
   mkdir -p "$INSTALL_ROOT/data"
   {
+    printf '%s\n' "NOMSOD_CLUSTER_ID=$CLUSTER_ID"
     if [ "$ROLE" = "supervisor" ] || [ "$ROLE" = "both" ]; then
       printf '%s\n' "NOMSOD_GATEWAY_HOST=127.0.0.1"
       printf '%s\n' "NOMSOD_GATEWAY_PORT=$GATEWAY_PORT"

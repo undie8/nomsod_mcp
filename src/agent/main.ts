@@ -8,9 +8,11 @@ import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/pro
 import { getNomsodVersion } from "../shared/version.js";
 import { AgentWorkerManager } from "./worker-manager.js";
 import { hasConnectedPrimaryGateway, isFallbackGatewayUrl } from "./gateway-routing.js";
+import { resolveClusterId } from "../shared/single-cluster.js";
 
 const root = process.cwd();
 const version = getNomsodVersion(root);
+const clusterId = resolveClusterId();
 const gatewayPort = Number(process.env.NOMSOD_GATEWAY_PORT || 3219);
 const peerPort = Number(process.env.NOMSOD_PEER_PORT || gatewayPort + 5);
 const legacyGatewayUrl = process.env.NOMSOD_GATEWAY_WS || ("ws://127.0.0.1:" + gatewayPort + "/agent");
@@ -178,7 +180,11 @@ async function probeNomsodPeerGateway(gatewayUrl: string): Promise<boolean> {
 
         try {
           const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          resolve(body?.ok === true && body?.service === "nomsod-peer");
+          resolve(
+            body?.ok === true &&
+            body?.service === "nomsod-peer" &&
+            (body?.clusterId === undefined || body?.clusterId === clusterId)
+          );
         } catch {
           resolve(false);
         }
@@ -239,6 +245,7 @@ async function startHealthServer(): Promise<void> {
         ok: true,
         service: "nomsod-agent-guardian",
         version,
+        clusterId,
         guardianPid: process.pid,
         gatewayConnected: connectedGateways.size > 0,
         connectedGateways: connectedGateways.size,
@@ -280,6 +287,7 @@ async function run(): Promise<void> {
   console.log(
     `[agent-guardian] device=${descriptor.displayName} id=${descriptor.deviceId} platform=${descriptor.platform}`
   );
+  console.log(`[agent-guardian] cluster=${clusterId}`);
   console.log(`[agent-guardian] configured gateways=${gatewayUrls.size}`);
 
   const saveDeviceToken = async (deviceToken: string) => {

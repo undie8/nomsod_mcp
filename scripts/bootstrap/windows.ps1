@@ -7,9 +7,11 @@ param(
   [string]$PairingKey = "",
   [string]$OwnerKey = "",
   [string]$ClusterKey = "",
+  [string]$ClusterId = "",
   [string]$DeviceName = "",
   [string]$EnrollmentToken = "",
-  [switch]$PrepareOnly
+  [switch]$PrepareOnly,
+  [switch]$RecoveryMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +19,11 @@ $ErrorActionPreference = "Stop"
 if ($env:NOMSOD_PUBLIC_BASE_URL -and -not $PSBoundParameters.ContainsKey("PublicBaseUrl")) {
   $PublicBaseUrl = $env:NOMSOD_PUBLIC_BASE_URL
 }
+
+if (-not $ClusterId) {
+  $ClusterId = if ($env:NOMSOD_CLUSTER_ID) { $env:NOMSOD_CLUSTER_ID.Trim() } else { "nomsod-main-v1" }
+}
+$ExpectedClusterId = $ClusterId
 
 $GatewayWsList = $GatewayWs
 
@@ -90,6 +97,20 @@ $CloudflareTunnelId = ""
 $CloudflareCredentialsBase64 = ""
 $CloudflareHealthUrl = ""
 
+if (-not $EnrollmentToken -and -not $RecoveryMode) {
+  throw "Nomsod MCP has one existing cluster. This installer cannot create a second cluster. Use Add new computer on any online Nomsod node. If every node was wiped, use the single-cluster recovery procedure."
+}
+
+if ($RecoveryMode) {
+  if (-not $PairingKey -or -not $OwnerKey -or -not $ClusterKey) {
+    throw "RecoveryMode requires the existing cluster pairing, owner and cluster keys. It never creates new cluster secrets."
+  }
+  $Role = "Both"
+  $GatewayWs = "ws://127.0.0.1:$GatewayPort/agent"
+  $publicGatewayWs = (($PublicBaseUrl.TrimEnd("/") -replace "^https://", "wss://") -replace "^http://", "ws://") + "/agent"
+  $GatewayWsList = "$GatewayWs,$publicGatewayWs"
+}
+
 if ($EnrollmentToken) {
   Write-Host "Joining Nomsod MCP cluster..."
   $EnrollmentBundle = Invoke-RestMethod -UseBasicParsing -Headers @{
@@ -107,7 +128,13 @@ if ($EnrollmentToken) {
     throw "Enrollment response is incomplete."
   }
 
+  $enrollmentClusterId = [string]$EnrollmentBundle.clusterId
+  if (-not $enrollmentClusterId -or $enrollmentClusterId -ne $ExpectedClusterId) {
+    throw "Enrollment cluster mismatch. Expected '$ExpectedClusterId', got '$enrollmentClusterId'."
+  }
+
   $Role = "Both"
+  $ClusterId = $enrollmentClusterId
   $PublicBaseUrl = [string]$EnrollmentBundle.publicBaseUrl
   $PairingKey = [string]$EnrollmentBundle.pairingToken
   $OwnerKey = [string]$EnrollmentBundle.ownerKey
@@ -219,6 +246,7 @@ try {
     $identity = Join-Path $InstallRoot "data\device.json"
     $logDir = Join-Path $InstallRoot "data\logs"
     $lines = New-Object Collections.Generic.List[string]
+    $lines.Add("NOMSOD_CLUSTER_ID=$ClusterId")
 
     if ($Role -in @("Supervisor", "Both")) {
       $lines.Add("NOMSOD_GATEWAY_HOST=127.0.0.1")

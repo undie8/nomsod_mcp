@@ -30,6 +30,7 @@ function service() {
     "https://mcp.nomsod.net",
     "test-pairing",
     "test-owner",
+    "nomsod-main-v1",
     34100,
     34104
   );
@@ -43,13 +44,16 @@ describe("enrollment", () => {
     expect(invite.windowsCommand).toContain("NOMSOD_ENROLLMENT_TOKEN");
     expect(invite.windowsCommand).toContain("/install/windows.ps1");
     expect(invite.windowsCommand).toContain("NOMSOD_PUBLIC_BASE_URL");
+    expect(invite.windowsCommand).toContain("NOMSOD_CLUSTER_ID");
     expect(invite.macosCommand).toContain("NOMSOD_PUBLIC_BASE_URL");
+    expect(invite.macosCommand).toContain("NOMSOD_CLUSTER_ID");
     expect(invite.token.startsWith("nen1.")).toBe(true);
 
     const bundle = await enrollment.bootstrap(invite.token, "windows");
     expect(bundle).toMatchObject({
-      version: 1,
+      version: 2,
       role: "both",
+      clusterId: "nomsod-main-v1",
       publicBaseUrl: "https://mcp.nomsod.net",
       gatewayPort: 34100,
       peerPort: 34104,

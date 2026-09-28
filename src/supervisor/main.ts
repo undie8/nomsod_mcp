@@ -12,6 +12,7 @@ import { RuntimeManager } from "./runtime-manager.js";
 import { getNomsodVersion } from "../shared/version.js";
 import { serveDistribution } from "./distribution.js";
 import { EnrollmentService, type EnrollmentPlatform } from "./enrollment.js";
+import { resolveClusterId } from "../shared/single-cluster.js";
 
 function isTailscaleIpv4(address: string): boolean {
   const parts = address.split(".").map(Number);
@@ -69,6 +70,7 @@ const runtimePorts: [number, number] = [
 const pairingToken = process.env.NOMSOD_PAIRING_TOKEN || "";
 const ownerKey = process.env.NOMSOD_OWNER_KEY || pairingToken;
 const publicBase = (process.env.NOMSOD_PUBLIC_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
+const clusterId = resolveClusterId();
 const controlKey = loadOrCreateControlKey(root);
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
@@ -107,13 +109,14 @@ await registry.load();
 const oauth = new OAuthService(publicBase, ownerKey);
 await oauth.initialize();
 
-const hub = new AgentHub(registry, pairingToken);
+const hub = new AgentHub(registry, pairingToken, clusterId);
 const releaseManager = new ReleaseManager(root);
 const enrollment = new EnrollmentService(
   root,
   publicBase,
   pairingToken,
   ownerKey,
+  clusterId,
   port,
   peerPort
 );
@@ -214,6 +217,7 @@ const publicServer = http.createServer(async (req, res) => {
       ok: true,
       service: "nomsod-supervisor",
       version,
+      clusterId,
       supervisorPid: process.pid,
       connectedDevices: hub.listDevices().length,
       transport: "streamable-http-stateless",
@@ -286,6 +290,7 @@ if (peerHost) {
         ok: true,
         service: "nomsod-peer",
         version,
+        clusterId,
         gatewayNode: nodeName,
         connectedDevices: hub.listDevices().length
       });
@@ -315,6 +320,7 @@ publicServer.requestTimeout = 310_000;
 
 publicServer.listen(port, host, () => {
   console.log(`[supervisor] node=${nodeName}`);
+  console.log(`[supervisor] cluster=${clusterId}`);
   console.log(`[supervisor] Nomsod MCP public gateway: http://${host}:${port}`);
   console.log(`[supervisor] public MCP endpoint: ${publicBase}/mcp`);
   console.log(`[supervisor] agent endpoint: ws://${host}:${port}/agent`);

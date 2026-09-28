@@ -2,6 +2,7 @@ export type DevicePlatform = "win32" | "darwin" | "linux" | string;
 
 export interface DeviceDescriptor {
   deviceId: string;
+  clusterId?: string;
   displayName: string;
   hostname: string;
   platform: DevicePlatform;
