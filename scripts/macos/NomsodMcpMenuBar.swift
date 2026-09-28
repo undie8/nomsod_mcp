@@ -92,10 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enroll.submenu = enrollMenu
         menu.addItem(enroll)
 
-        let recovery = NSMenuItem(title: "Export recovery kit…", action: #selector(exportRecoveryKit), keyEquivalent: "")
-        recovery.target = self
-        menu.addItem(recovery)
-
         let copyUrl = NSMenuItem(title: "Copy MCP URL", action: #selector(copyMcpUrl), keyEquivalent: "")
         copyUrl.target = self
         menu.addItem(copyUrl)

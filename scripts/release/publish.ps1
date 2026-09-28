@@ -72,6 +72,7 @@ function Copy-SharedFiles([string]$stage) {
   Copy-Item (Join-Path $Root "assets") (Join-Path $stage "assets") -Recurse -Force
   New-Item -ItemType Directory -Force -Path (Join-Path $stage "scripts") | Out-Null
   Copy-Item (Join-Path $Root "scripts\recovery") (Join-Path $stage "scripts\recovery") -Recurse -Force
+  Copy-Item (Join-Path $Root "scripts\nas-bootstrap") (Join-Path $stage "scripts\nas-bootstrap") -Recurse -Force
 }
 
 $windowsStage = Join-Path $stageRoot "windows"
@@ -167,6 +168,21 @@ if ($DistributionTarget) {
   }
 }
 
+$nasBootstrapSynced = $false
+if ($DistributionTarget) {
+  $nasPublisher = Join-Path $Root "scripts\nas-bootstrap\publish-to-nas.ps1"
+  $runtimeRoot = Split-Path (Split-Path ([IO.Path]::GetFullPath($DistributionTarget)) -Parent) -Parent
+  if ((Test-Path $nasPublisher) -and (Test-Path (Join-Path $runtimeRoot ".env"))) {
+    try {
+      & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $nasPublisher -RuntimeRoot $runtimeRoot
+      if ($LASTEXITCODE -eq 0) { $nasBootstrapSynced = $true }
+      else { Write-Warning "NAS bootstrap synchronization exited with code $LASTEXITCODE." }
+    } catch {
+      Write-Warning ("NAS bootstrap synchronization failed: " + $_.Exception.Message)
+    }
+  }
+}
+
 Write-Host ""
 Write-Host "Nomsod MCP v$version release built."
 Write-Host "Windows: $windowsArchive"
@@ -175,3 +191,4 @@ Write-Host "macOS:   $macArchive"
 Write-Host "  SHA256: $macSha"
 Write-Host "Distribution: $distribution"
 if ($promotedTo) { Write-Host "Promoted to:  $promotedTo" }
+if ($nasBootstrapSynced) { Write-Host "NAS bootstrap: KKSM2 / KKS updated" }

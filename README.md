@@ -326,11 +326,16 @@ Nomsod MCP publishes separate Windows and macOS release packages at `mcp.nomsod.
 
 This deployment is a **single-owner, single-cluster** network. The stable logical cluster ID is `nomsod-main-v1`; computers are disposable nodes inside that one network. Normal installation never creates another cluster.
 
-To add a computer, use **Nomsod MCP Control -> Add new computer** on any online node and copy the generated Windows or macOS install command. The command contains a signed short-lived enrollment invite and pins `NOMSOD_CLUSTER_ID` to the existing cluster. The invite expires after 10 minutes.
+This deployment uses **KKSM2 / KKS (Synology DS920+) as the permanent bootstrap authority**. The NAS stores the current Windows/macOS installers, both SHA-verified release archives, the stable `nomsod-main-v1` cluster identity, and the existing Cloudflare tunnel credential. Computers are disposable nodes; the NAS is the durable source used to create or recreate them.
 
-Running the public bootstrap without an enrollment invite fails closed instead of prompting for new pairing/owner secrets. This prevents an offline existing network from being mistaken for a new network and prevents accidental split-brain creation. Recovery never generates a second cluster identity.
+The normal new-computer path therefore does **not** require another Nomsod computer to be online. Open the private NAS folder and run the platform launcher:
 
-For total-loss recovery, Nomsod Control can export a **Recovery Kit** ZIP. The kit is self-contained for Nomsod itself: it carries both platform release archives, both bootstrap installers, the stable `nomsod-main-v1` cluster credentials, and the existing Cloudflare tunnel credential. After every Nomsod computer has been wiped or is unavailable, a new Windows or macOS machine can restore the same cluster from that ZIP without contacting any old Nomsod node or requiring `mcp.nomsod.net` to be online first. The recovery bootstrap verifies the bundled release SHA-256 before installation, recreates the same Gateway + Agent configuration, and brings the existing public tunnel back online. The ZIP is therefore a sensitive owner credential backup and must be stored outside Nomsod computers on protected storage.
+- Windows: `\\KKS\docker\nomsod-bootstrap\current\INSTALL-WINDOWS.cmd`
+- macOS: mount `smb://KKS/docker/nomsod-bootstrap/current` and run `INSTALL-MACOS.command`
+
+The launcher installs the same `nomsod-main-v1` cluster directly from NAS-local bootstrap material. It does not create another cluster and does not need `mcp.nomsod.net` or GUNN/Mac to be reachable before installation. **Add new computer** remains available as an optional convenience when an existing Nomsod node is online, but it is no longer the bootstrap dependency.
+
+Running the public bootstrap without an enrollment invite still fails closed. The NAS bootstrap folder is private owner infrastructure and must not be published on the public web.
 
 Computer identity and display name are created at runtime; no machine name is hardcoded.
 
@@ -339,7 +344,7 @@ Default installation locations:
 - Windows: `%LOCALAPPDATA%\Nomsod MCP`
 - macOS: `~/Library/Application Support/Nomsod MCP`
 
-The installed Control UI uses the Nomsod cat icon on the Windows notification area and macOS menu bar. It shows status, device identity, Gateway/MCP URL, version, restart controls, a confirmation-gated **Reveal keys** action, normal **Add new computer** enrollment, and **Export recovery kit…** for total-loss recovery. Quitting the Control UI does not stop the Supervisor or Agent.
+The installed Control UI uses the Nomsod cat icon on the Windows notification area and macOS menu bar. It shows status, device identity, Gateway/MCP URL, version, restart controls, a confirmation-gated **Reveal keys** action, and optional **Add new computer** enrollment. The permanent bootstrap authority is the private NAS folder on KKSM2 rather than a user-managed recovery export. Quitting the Control UI does not stop the Supervisor or Agent.
 
 ### Runtime process names
 
@@ -376,7 +381,7 @@ On the Windows gateway that serves the public distribution, build and promote in
 .\scripts\release\publish.ps1 -DistributionTarget (Join-Path $env:LOCALAPPDATA 'Nomsod MCP\data\distribution')
 ```
 
-Promotion copies the immutable versioned artifacts first, then the installer scripts, and updates `releases/latest/*.json` last. This prevents clients from observing a latest manifest before the referenced archives are available.
+Promotion copies the immutable versioned artifacts first, then the installer scripts, and updates `releases/latest/*.json` last. This prevents clients from observing a latest manifest before the referenced archives are available. When a runtime distribution target is supplied, the publisher also performs a best-effort refresh of the KKSM2 NAS bootstrap authority so the NAS tracks the newest release automatically.
 
 ## Deliberate non-goals
 

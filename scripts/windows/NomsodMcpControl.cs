@@ -72,10 +72,6 @@ namespace NomsodMcpControl
             enrollMenu.DropDownItems.Add(enrollMac);
             menu.Items.Add(enrollMenu);
 
-            var exportRecovery = new ToolStripMenuItem("Export recovery kit...");
-            exportRecovery.Click += delegate { ExportRecoveryKit(); };
-            menu.Items.Add(exportRecovery);
-
             var copyUrlItem = new ToolStripMenuItem("Copy MCP URL");
             copyUrlItem.Click += delegate {
                 Clipboard.SetText(GetPublicMcpUrl());
