@@ -360,6 +360,8 @@ Each installation creates an updater that checks the platform-specific latest ma
 
 An update is applied only after its package SHA-256 matches the manifest. `.env`, device identity, `data/`, logs and the portable runtime are preserved. Windows and macOS packages are independent, so either platform can be released without replacing the other package.
 
+Release distribution is federated across same-cluster Gateway peers over the Tailscale peer port. For `releases/latest/*.json` and installer scripts, a Gateway compares its local manifest with healthy peer manifests and serves the newest semantic version. If an immutable versioned archive is missing locally, the Gateway streams it from a same-cluster peer. Peer distribution requests are local-only, so federation cannot recurse into a proxy loop. This prevents a stale active-active node from handing a new computer an older installer or manifest.
+
 ### Publishing a release
 
 Keep `VERSION`, `package.json` and `package-lock.json` on the same semantic version. Versioned artifacts are immutable: the publisher refuses to rebuild a version whose release directory already contains files.

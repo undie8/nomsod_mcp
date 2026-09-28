@@ -11,6 +11,7 @@ import { ReleaseManager } from "./release-manager.js";
 import { RuntimeManager } from "./runtime-manager.js";
 import { getNomsodVersion } from "../shared/version.js";
 import { serveDistribution } from "./distribution.js";
+import { createDistributionPeerResolver } from "./distribution-peers.js";
 import { EnrollmentService, type EnrollmentPlatform } from "./enrollment.js";
 import { resolveClusterId } from "../shared/single-cluster.js";
 
@@ -71,6 +72,7 @@ const pairingToken = process.env.NOMSOD_PAIRING_TOKEN || "";
 const ownerKey = process.env.NOMSOD_OWNER_KEY || pairingToken;
 const publicBase = (process.env.NOMSOD_PUBLIC_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
 const clusterId = resolveClusterId();
+const resolveDistributionPeers = createDistributionPeerResolver(peerPort, clusterId);
 const controlKey = loadOrCreateControlKey(root);
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
@@ -210,7 +212,7 @@ const publicServer = http.createServer(async (req, res) => {
     return;
   }
 
-  if (await serveDistribution(req, res, url, root)) return;
+  if (await serveDistribution(req, res, url, root, resolveDistributionPeers)) return;
 
   if (url.pathname === "/health") {
     sendJson(res, 200, {
@@ -282,7 +284,7 @@ publicServer.on("upgrade", (req, socket, head) => {
 
 let peerServer: http.Server | undefined;
 if (peerHost) {
-  peerServer = http.createServer((req, res) => {
+  peerServer = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -296,6 +298,8 @@ if (peerHost) {
       });
       return;
     }
+
+    if (await serveDistribution(req, res, url, root)) return;
 
     sendJson(res, 404, { error: "not_found" });
   });
