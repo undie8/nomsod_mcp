@@ -22,6 +22,27 @@ try {
   $updateStarted = $false
   $updateCommitted = $false
 
+  $distributionBase = $ManifestUrl -replace '/releases/latest/windows\.json(?:\?.*)?$', ''
+  if (-not $distributionBase) { $distributionBase = "https://mcp.nomsod.net" }
+
+  function Sync-DistributionBestEffort {
+    $syncScript = Join-Path $Root "scripts\windows\sync-distribution.ps1"
+    if (-not (Test-Path $syncScript)) { return }
+
+    try {
+      & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $syncScript -Root $Root -PublicBaseUrl $distributionBase 1>$null
+      if ($LASTEXITCODE -ne 0) {
+        throw "distribution sync exited with code $LASTEXITCODE"
+      }
+    } catch {
+      try {
+        $syncLogDir = Join-Path $Root "data\logs"
+        New-Item -ItemType Directory -Force -Path $syncLogDir | Out-Null
+        Add-Content -Encoding UTF8 -Path (Join-Path $syncLogDir "updater.log") -Value ("[{0}] WARN distribution sync failed: {1}" -f [DateTime]::UtcNow.ToString("o"), $_.Exception.Message)
+      } catch {}
+    }
+  }
+
   $headers = @{
     "Cache-Control" = "no-cache"
     "Pragma" = "no-cache"
@@ -39,6 +60,8 @@ try {
   } catch {
     throw "Invalid semantic version in updater. current=$current latest=$($manifest.version)"
   }
+
+  Sync-DistributionBestEffort
 
   if (-not $Force -and $latestVersion -le $currentVersion) {
     exit 0

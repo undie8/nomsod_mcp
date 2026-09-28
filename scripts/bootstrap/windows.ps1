@@ -302,6 +302,19 @@ try {
     return
   }
 
+  if ($Role -in @("Supervisor", "Both")) {
+    $syncScript = Join-Path $InstallRoot "scripts\windows\sync-distribution.ps1"
+    if (Test-Path $syncScript) {
+      try {
+        Write-Host "Synchronizing release mirror..."
+        & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $syncScript -Root $InstallRoot -PublicBaseUrl $PublicBaseUrl
+        if ($LASTEXITCODE -ne 0) { throw "distribution sync exited with code $LASTEXITCODE" }
+      } catch {
+        Write-Warning ("Initial distribution mirror sync failed; federation remains available: " + $_.Exception.Message)
+      }
+    }
+  }
+
   Write-Host "Installing Nomsod MCP $Role..."
   & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallRoot "scripts\windows\install.ps1") -Mode $Role
   if ($LASTEXITCODE -ne 0) { throw "Nomsod MCP service installation failed." }

@@ -150,7 +150,7 @@ The Guardian uses heartbeat, ping/pong, stale detection, and exponential reconne
 
 Each Supervisor exposes its local distribution tree on the public socket and, read-only, on the Tailscale peer socket. Public distribution requests may consult healthy same-cluster peer sockets. `releases/latest/*.json` and installer scripts follow the highest semantic version available in the cluster; missing immutable archives are streamed from a peer. Peer-socket distribution handling is local-only, which prevents recursive proxy loops.
 
-This means an active-active node may be behind on its local `data/distribution` mirror without serving stale bootstrap material to a new computer, as long as another healthy node in the same cluster has the release.
+This means an active-active node may be behind on its local `data/distribution` mirror without serving stale bootstrap material to a new computer, as long as another healthy node in the same cluster has the release. Bootstrap and the periodic updater additionally reconcile the local mirror in artifact-first / manifest-last order, validating SHA-256 before promotion. Mirror reconciliation runs even when no application update is needed, so temporary staleness heals automatically.
 
 ## OS lifecycle
 

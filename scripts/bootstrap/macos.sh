@@ -212,6 +212,12 @@ if [ ! -f "$ENVFILE" ]; then
 fi
 
 chmod +x "$INSTALL_ROOT/scripts/macos/"*.sh
+if [ "$ROLE" = "supervisor" ] || [ "$ROLE" = "both" ]; then
+  echo "Synchronizing release mirror..."
+  if ! /bin/sh "$INSTALL_ROOT/scripts/macos/sync-distribution.sh" "$INSTALL_ROOT" "$PUBLIC_BASE"; then
+    echo "Warning: initial distribution mirror sync failed; federation remains available." >&2
+  fi
+fi
 /bin/sh "$INSTALL_ROOT/scripts/macos/install.sh" "$ROLE"
 
 

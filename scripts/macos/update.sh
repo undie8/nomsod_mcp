@@ -8,6 +8,11 @@ if [ -z "$ROOT" ]; then
   ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 fi
 
+PUBLIC_BASE=${MANIFEST_URL%/releases/latest/macos.json}
+if [ -z "$PUBLIC_BASE" ] || [ "$PUBLIC_BASE" = "$MANIFEST_URL" ]; then
+  PUBLIC_BASE=https://mcp.nomsod.net
+fi
+
 LOCK_DIR="$ROOT/data/update.lock"
 LOG_DIR="$ROOT/data/logs"
 LOG_FILE="$LOG_DIR/updater.log"
@@ -43,6 +48,15 @@ trap cleanup EXIT HUP INT TERM
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" >> "$LOG_FILE"
+}
+
+sync_distribution_best_effort() {
+  SCRIPT="$ROOT/scripts/macos/sync-distribution.sh"
+  [ -f "$SCRIPT" ] || return 0
+
+  if ! /bin/sh "$SCRIPT" "$ROOT" "$PUBLIC_BASE" >> "$LOG_FILE" 2>&1; then
+    log "WARN distribution sync failed"
+  fi
 }
 
 version_gt() {
@@ -87,6 +101,8 @@ if [ -z "$LATEST" ] || [ -z "$URL" ] || [ -z "$EXPECTED" ]; then
   log "ERROR invalid update manifest"
   exit 2
 fi
+
+sync_distribution_best_effort
 
 if ! version_gt "$LATEST" "$CURRENT"; then
   exit 0
