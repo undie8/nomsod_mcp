@@ -386,9 +386,13 @@ else
   fi
 fi
 
+UPDATER_RUNNER="$ROOT/scripts/macos/Nomsod MCP Updater"
+WATCHDOG_RUNNER="$ROOT/scripts/macos/Nomsod MCP Watchdog"
+chmod 700 "$UPDATER_RUNNER" "$WATCHDOG_RUNNER"
+
 UPDATER_LABEL=com.nomsod.mcp.updater
 UPDATER_PLIST="$LAUNCH_DIR/$UPDATER_LABEL.plist"
-UPDATER_SCRIPT_X=$(xml_escape "$ROOT/scripts/macos/update.sh")
+UPDATER_RUNNER_X=$(xml_escape "$UPDATER_RUNNER")
 ROOT_X=$(xml_escape "$ROOT")
 UPDATER_OUT_X=$(xml_escape "$LOG_DIR/launchd-updater.out.log")
 UPDATER_ERR_X=$(xml_escape "$LOG_DIR/launchd-updater.err.log")
@@ -402,8 +406,7 @@ cat > "$UPDATER_PLIST" <<EOF
   <string>$UPDATER_LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
-    <string>$UPDATER_SCRIPT_X</string>
+    <string>$UPDATER_RUNNER_X</string>
     <string>$ROOT_X</string>
   </array>
   <key>StartInterval</key>
@@ -436,7 +439,7 @@ else
 fi
 WATCHDOG_LABEL=com.nomsod.mcp.watchdog
 WATCHDOG_PLIST="$LAUNCH_DIR/$WATCHDOG_LABEL.plist"
-WATCHDOG_SCRIPT=$(xml_escape "$ROOT/scripts/macos/watchdog.sh")
+WATCHDOG_RUNNER_X=$(xml_escape "$WATCHDOG_RUNNER")
 ROOT_X=$(xml_escape "$ROOT")
 DOMAIN_X=$(xml_escape "$DOMAIN")
 OUT_X=$(xml_escape "$LOG_DIR/launchd-watchdog.out.log")
@@ -453,8 +456,7 @@ cat > "$WATCHDOG_PLIST" <<EOF
   <string>$WATCHDOG_LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
-    <string>$WATCHDOG_SCRIPT</string>
+    <string>$WATCHDOG_RUNNER_X</string>
     <string>$ROOT_X</string>
     <string>$DOMAIN_X</string>
     <string>$CHECK_SUPERVISOR</string>
