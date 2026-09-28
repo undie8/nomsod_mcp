@@ -3,8 +3,7 @@ param(
   [string]$NasSshHost = "100.111.178.74",
   [string]$NasSshUser = "gunn",
   [string]$NasPath = "/volume1/docker/nomsod-bootstrap",
-  [string]$PublicBaseUrl = "https://mcp.nomsod.net",
-  [string]$InternalBootstrapUrl = "http://100.111.178.74:34150"
+  [string]$PublicBaseUrl = "https://install.nomsod.net"
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,19 +45,6 @@ try {
   $bundleSource = Join-Path $extract "Nomsod-Recovery-Kit"
   if (-not (Test-Path $bundleSource)) { throw "Exported bootstrap bundle is incomplete." }
 
-  [IO.File]::WriteAllText((Join-Path $bundleSource "bootstrap-token.txt"), $bootstrapToken + [Environment]::NewLine, $utf8)
-  [IO.File]::WriteAllText((Join-Path $bundleSource "nas-bootstrap-internal-url.txt"), $InternalBootstrapUrl.TrimEnd("/") + [Environment]::NewLine, $utf8)
-
-  $baseUrl = $PublicBaseUrl.TrimEnd("/") + "/bootstrap/" + $bootstrapToken
-  $bundlePublicDir = Join-Path $bundleSource ("bootstrap-public\" + $bootstrapToken)
-  New-Item -ItemType Directory -Force -Path $bundlePublicDir | Out-Null
-  $winTemplate = [IO.File]::ReadAllText((Join-Path $scriptRoot "PUBLIC-WINDOWS.ps1.template"))
-  $macTemplate = [IO.File]::ReadAllText((Join-Path $scriptRoot "PUBLIC-MACOS.sh.template"))
-  $winScript = $winTemplate.Replace("__BASE_URL__", $baseUrl).Replace("__SELF_URL__", $baseUrl + "/windows.ps1")
-  $macScript = $macTemplate.Replace("__BASE_URL__", $baseUrl)
-  [IO.File]::WriteAllText((Join-Path $bundlePublicDir "windows.ps1"), $winScript, $utf8)
-  [IO.File]::WriteAllText((Join-Path $bundlePublicDir "macos.sh"), $macScript, $utf8)
-
   foreach ($file in @("INSTALL-WINDOWS.cmd","INSTALL-WINDOWS.ps1","INSTALL-MACOS.command","INSTALL-MACOS.sh","README.txt")) {
     Copy-Item (Join-Path $scriptRoot $file) (Join-Path $packageRoot $file) -Force
   }
@@ -70,11 +56,19 @@ try {
     Copy-Item (Join-Path $scriptRoot $file) (Join-Path $runtimeConfig $file) -Force
   }
 
+  $baseUrl = $PublicBaseUrl.TrimEnd("/") + "/bootstrap/" + $bootstrapToken
   $publicDir = Join-Path $packageRoot ("public\bootstrap\" + $bootstrapToken)
   New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
-  Copy-Item (Join-Path $bundlePublicDir "windows.ps1") (Join-Path $publicDir "windows.ps1") -Force
-  Copy-Item (Join-Path $bundlePublicDir "macos.sh") (Join-Path $publicDir "macos.sh") -Force
-  Compress-Archive -Path (Join-Path $bundleSource "*") -DestinationPath (Join-Path $publicDir "bundle.zip") -CompressionLevel Optimal
+  $winTemplate = [IO.File]::ReadAllText((Join-Path $scriptRoot "PUBLIC-WINDOWS.ps1.template"))
+  $macTemplate = [IO.File]::ReadAllText((Join-Path $scriptRoot "PUBLIC-MACOS.sh.template"))
+  $winScript = $winTemplate.Replace("__BASE_URL__", $baseUrl).Replace("__SELF_URL__", $baseUrl + "/windows.ps1")
+  $macScript = $macTemplate.Replace("__BASE_URL__", $baseUrl)
+  [IO.File]::WriteAllText((Join-Path $publicDir "windows.ps1"), $winScript, $utf8)
+  [IO.File]::WriteAllText((Join-Path $publicDir "macos.sh"), $macScript, $utf8)
+  $publicBundleZip = Join-Path $publicDir "bundle.zip"
+  $tar = (Get-Command tar.exe -ErrorAction Stop).Source
+  & $tar -a -cf $publicBundleZip -C $bundleSource .
+  if ($LASTEXITCODE -ne 0) { throw "Could not create cross-platform public bootstrap bundle." }
   [IO.File]::WriteAllText((Join-Path $publicDir "windows-command.txt"), ("irm " + $baseUrl + "/windows.ps1 | iex" + [Environment]::NewLine), $utf8)
   [IO.File]::WriteAllText((Join-Path $publicDir "macos-command.txt"), ("curl -fsSL " + $baseUrl + "/macos.sh | sh" + [Environment]::NewLine), $utf8)
 
@@ -87,6 +81,7 @@ try {
     version = if ([string]$recovery.distribution.windowsVersion -eq [string]$recovery.distribution.macosVersion) { [string]$recovery.distribution.windowsVersion } else { $version }
     windowsVersion = [string]$recovery.distribution.windowsVersion
     macosVersion = [string]$recovery.distribution.macosVersion
+    installHost = "install.nomsod.net"
     publicBootstrap = $true
     updatedAt = [DateTime]::UtcNow.ToString("o")
   }
@@ -113,7 +108,7 @@ try {
   Write-Host ("Version: {0}" -f $status.version)
   Write-Host "Windows SMB: \\KKS\docker\nomsod-bootstrap\current\INSTALL-WINDOWS.cmd"
   Write-Host "macOS SMB: smb://KKS/docker/nomsod-bootstrap/current"
-  Write-Host "Public PowerShell bootstrap: ready"
+  Write-Host "Public PowerShell bootstrap: ready at install.nomsod.net"
 } finally {
   Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }

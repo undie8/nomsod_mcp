@@ -3,6 +3,6 @@ credentials-file: /etc/cloudflared/credentials.json
 protocol: http2
 
 ingress:
-  - hostname: mcp.nomsod.net
+  - hostname: install.nomsod.net
     service: http://nomsod-bootstrap-edge:8080
   - service: http_status:404

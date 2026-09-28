@@ -6,7 +6,7 @@ This installation has one logical Nomsod network for one owner. Its stable clust
 
 The permanent bootstrap authority is **KKSM2 / KKS**, the Synology DS920+ NAS. It stores the private bootstrap bundle for `nomsod-main-v1`: current platform installers and manifests, SHA-verified immutable release archives, stable cluster credentials, and the existing public-tunnel credential. Nomsod computers are replaceable nodes; the NAS is outside that disposable fleet.
 
-A fresh Windows or macOS computer can therefore install directly from the NAS share without any old Nomsod computer online. The NAS launcher feeds the existing cluster bootstrap bundle to the normal installer, which verifies the bundled release checksum and installs Gateway + Agent for `nomsod-main-v1`. It never generates a new cluster identity. The public bootstrap still fails closed when no enrollment token is present, while short-lived Control-generated enrollment remains an optional convenience path.
+A fresh Windows or macOS computer normally installs through the dedicated `install.nomsod.net` Cloudflare tunnel. The public URL contains a high-entropy private bootstrap token and terminates on KKSM2, which serves only the tokenized bootstrap files; it is independent of every Nomsod computer. The launcher downloads the NAS-held bundle, verifies the bundled release checksum, and installs Gateway + Agent for the existing `nomsod-main-v1` identity. Invalid bootstrap paths return 404. Direct SMB launchers and short-lived Control-generated enrollment remain fallback/convenience paths, not architectural dependencies.
 
 ## Topology
 
@@ -186,7 +186,7 @@ Running the Agent as the interactive user preserves the filesystem/profile/proce
 | Supervisor/Guardian is hard-killed | IPC causes children to exit; OS task/launchd restarts the parent |
 | Supervisor restarts | OAuth/device state persists; Agents reconnect |
 | One Gateway has stale/missing distribution files | public distribution resolves the newest same-cluster peer manifest and proxies missing immutable artifacts |
-| Every Nomsod machine is wiped/unavailable | install `nomsod-main-v1` directly from the private KKSM2 NAS bootstrap authority; no old node is required |
+| Every Nomsod machine is wiped/unavailable | run the private `install.nomsod.net` bootstrap link backed by KKSM2; no old node or NAS browsing is required |
 | Machine/network is unavailable | transport is interrupted until infrastructure returns |
 
 ## Text-editing invariant

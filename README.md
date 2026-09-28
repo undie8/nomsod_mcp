@@ -328,14 +328,21 @@ This deployment is a **single-owner, single-cluster** network. The stable logica
 
 This deployment uses **KKSM2 / KKS (Synology DS920+) as the permanent bootstrap authority**. The NAS stores the current Windows/macOS installers, both SHA-verified release archives, the stable `nomsod-main-v1` cluster identity, and the existing Cloudflare tunnel credential. Computers are disposable nodes; the NAS is the durable source used to create or recreate them.
 
-The normal new-computer path therefore does **not** require another Nomsod computer to be online. Open the private NAS folder and run the platform launcher:
+The normal new-computer path therefore does **not** require another Nomsod computer to be online and does not require browsing the NAS share. KKSM2 exposes only a tokenized bootstrap path through the dedicated `install.nomsod.net` Cloudflare tunnel. The private NAS bundle remains the authority behind that endpoint.
 
-- Windows: `\\KKS\docker\nomsod-bootstrap\current\INSTALL-WINDOWS.cmd`
-- macOS: mount `smb://KKS/docker/nomsod-bootstrap/current` and run `INSTALL-MACOS.command`
+Windows can install from a single PowerShell command:
 
-The launcher installs the same `nomsod-main-v1` cluster directly from NAS-local bootstrap material. It does not create another cluster and does not need `mcp.nomsod.net` or GUNN/Mac to be reachable before installation. **Add new computer** remains available as an optional convenience when an existing Nomsod node is online, but it is no longer the bootstrap dependency.
+```powershell
+irm https://install.nomsod.net/bootstrap/<private-bootstrap-token>/windows.ps1 | iex
+```
 
-Running the public bootstrap without an enrollment invite still fails closed. The NAS bootstrap folder is private owner infrastructure and must not be published on the public web.
+macOS can use the equivalent shell launcher:
+
+```sh
+curl -fsSL https://install.nomsod.net/bootstrap/<private-bootstrap-token>/macos.sh | sh
+```
+
+The private bootstrap token is a long-lived owner credential: keep the full URL private. Requests with an incorrect path return 404. The installer downloads the SHA-verified bundle from KKSM2, restores the same `nomsod-main-v1` cluster, and does not need GUNN, Mac, or `mcp.nomsod.net` to be online first. The SMB launchers remain available as a local fallback, and **Add new computer** remains an optional convenience when an existing Nomsod node is online.
 
 Computer identity and display name are created at runtime; no machine name is hardcoded.
 
