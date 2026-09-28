@@ -143,6 +143,8 @@ System DNS remains the first choice. The fallback applies only to Agent-to-Gatew
 
 If the public Gateway/network disappears temporarily, the Agent Guardian remains alive and reconnects automatically.
 
+In an active-active installation, local and Tailscale peer `ws://` Gateway routes are primary. The public `wss://` Gateway is retained as a fallback and is parked while any primary route is healthy. This prevents one device from opening both public and peer sockets to the same Gateway node and repeatedly superseding its own connection.
+
 ## UTF-8 and code-editing safety
 
 Nomsod treats text editing as UTF-8-safe by default.

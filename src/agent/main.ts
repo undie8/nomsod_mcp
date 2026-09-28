@@ -7,6 +7,7 @@ import { buildDescriptor, loadIdentity, saveIdentity } from "../shared/identity.
 import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/protocol.js";
 import { getNomsodVersion } from "../shared/version.js";
 import { AgentWorkerManager } from "./worker-manager.js";
+import { hasConnectedPrimaryGateway, isFallbackGatewayUrl } from "./gateway-routing.js";
 
 const root = process.cwd();
 const version = getNomsodVersion(root);
@@ -38,9 +39,11 @@ let stopping = false;
 let healthServer: http.Server | undefined;
 const connectedGateways = new Set<string>();
 const sockets = new Set<WebSocket>();
+const socketByGatewayUrl = new Map<string, WebSocket>();
 const reconnectAttempts = new Map<string, number>();
 const connectingGateways = new Set<string>();
 let peerDiscoveryTimer: NodeJS.Timeout | undefined;
+let fallbackGatewayTimer: NodeJS.Timeout | undefined;
 let identityWriteChain: Promise<void> = Promise.resolve();
 
 function resilientLookup(
@@ -292,8 +295,32 @@ async function run(): Promise<void> {
     await identityWriteChain;
   };
 
+  function closeFallbackConnections(): void {
+    for (const [gatewayUrl, socket] of socketByGatewayUrl) {
+      if (!isFallbackGatewayUrl(gatewayUrl)) continue;
+      if (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING) continue;
+      console.log(`[agent-guardian] parking fallback gateway while a primary route is healthy: ${gatewayUrl}`);
+      try { socket.close(4007, "primary gateway available"); }
+      catch { try { socket.terminate(); } catch {} }
+    }
+  }
+
+  function ensureFallbackConnections(): void {
+    if (stopping || hasConnectedPrimaryGateway(connectedGateways)) return;
+    for (const gatewayUrl of gatewayUrls) {
+      if (isFallbackGatewayUrl(gatewayUrl)) connect(gatewayUrl);
+    }
+  }
+
+  function scheduleFallbackConnections(delayMs = 1_500): void {
+    if (fallbackGatewayTimer) clearTimeout(fallbackGatewayTimer);
+    fallbackGatewayTimer = setTimeout(() => ensureFallbackConnections(), delayMs);
+    fallbackGatewayTimer.unref();
+  }
+
   const connect = (gatewayUrl: string) => {
     if (stopping || connectingGateways.has(gatewayUrl) || connectedGateways.has(gatewayUrl)) return;
+    if (isFallbackGatewayUrl(gatewayUrl) && hasConnectedPrimaryGateway(connectedGateways)) return;
     connectingGateways.add(gatewayUrl);
 
     const ws = new WebSocket(gatewayUrl, {
@@ -302,6 +329,7 @@ async function run(): Promise<void> {
       lookup: resilientLookup as any
     });
     sockets.add(ws);
+    socketByGatewayUrl.set(gatewayUrl, ws);
 
     let lastInbound = Date.now();
     let heartbeatTimer: NodeJS.Timeout | undefined;
@@ -362,7 +390,16 @@ async function run(): Promise<void> {
       if (message.type === "ready") {
         connectingGateways.delete(gatewayUrl);
         connectedGateways.add(gatewayUrl);
+        reconnectAttempts.set(gatewayUrl, 0);
         console.log(`[agent-guardian] connected and ready: ${gatewayUrl}`);
+
+        if (!isFallbackGatewayUrl(gatewayUrl)) {
+          if (fallbackGatewayTimer) {
+            clearTimeout(fallbackGatewayTimer);
+            fallbackGatewayTimer = undefined;
+          }
+          closeFallbackConnections();
+        }
         return;
       }
 
@@ -401,8 +438,19 @@ async function run(): Promise<void> {
       connectingGateways.delete(gatewayUrl);
       connectedGateways.delete(gatewayUrl);
       sockets.delete(ws);
+      if (socketByGatewayUrl.get(gatewayUrl) === ws) socketByGatewayUrl.delete(gatewayUrl);
       cleanupTimers();
       if (stopping) return;
+
+      if (!hasConnectedPrimaryGateway(connectedGateways)) {
+        scheduleFallbackConnections(250);
+      }
+
+      if (isFallbackGatewayUrl(gatewayUrl) && hasConnectedPrimaryGateway(connectedGateways)) {
+        reconnectAttempts.set(gatewayUrl, 0);
+        console.log(`[agent-guardian] fallback gateway parked: ${gatewayUrl}`);
+        return;
+      }
 
       const attempt = reconnectAttempts.get(gatewayUrl) || 0;
       const delay = backoffMs(attempt);
@@ -430,9 +478,10 @@ async function run(): Promise<void> {
   };
 
   for (const gatewayUrl of gatewayUrls) {
-    connect(gatewayUrl);
+    if (!isFallbackGatewayUrl(gatewayUrl)) connect(gatewayUrl);
   }
 
+  scheduleFallbackConnections();
   void discoverAndConnectPeers();
   peerDiscoveryTimer = setInterval(() => void discoverAndConnectPeers(), 30_000);
   peerDiscoveryTimer.unref();
@@ -444,11 +493,13 @@ async function shutdown(): Promise<void> {
   connectedGateways.clear();
   connectingGateways.clear();
   if (peerDiscoveryTimer) clearInterval(peerDiscoveryTimer);
+  if (fallbackGatewayTimer) clearTimeout(fallbackGatewayTimer);
 
   for (const ws of sockets) {
     try { ws.close(1001, "agent shutdown"); } catch {}
   }
   sockets.clear();
+  socketByGatewayUrl.clear();
 
   await Promise.all([
     workerManager.shutdown(),
