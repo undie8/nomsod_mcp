@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import { URL } from "node:url";
@@ -9,6 +11,7 @@ import { ReleaseManager } from "./release-manager.js";
 import { RuntimeManager } from "./runtime-manager.js";
 import { getNomsodVersion } from "../shared/version.js";
 import { serveDistribution } from "./distribution.js";
+import { EnrollmentService, type EnrollmentPlatform } from "./enrollment.js";
 
 function isTailscaleIpv4(address: string): boolean {
   const parts = address.split(".").map(Number);
@@ -31,6 +34,26 @@ function detectTailscaleIpv4(): string {
   }
   return "";
 }
+
+function loadOrCreateControlKey(rootDir: string): string {
+  const configured = (process.env.NOMSOD_CONTROL_KEY || "").trim();
+  if (configured) return configured;
+
+  const keyPath = process.env.NOMSOD_CONTROL_KEY_PATH || path.resolve(rootDir, "data", "control.key");
+
+  try {
+    if (existsSync(keyPath)) {
+      const existing = readFileSync(keyPath, "utf8").trim();
+      if (existing) return existing;
+    }
+  } catch {}
+
+  const generated = "nsc_" + randomBytes(32).toString("base64url");
+  mkdirSync(path.dirname(keyPath), { recursive: true });
+  writeFileSync(keyPath, generated + "\n", { encoding: "utf8", mode: 0o600 });
+  try { chmodSync(keyPath, 0o600); } catch {}
+  return generated;
+}
 const root = process.cwd();
 const version = getNomsodVersion(root);
 const host = process.env.NOMSOD_GATEWAY_HOST || "127.0.0.1";
@@ -46,7 +69,7 @@ const runtimePorts: [number, number] = [
 const pairingToken = process.env.NOMSOD_PAIRING_TOKEN || "";
 const ownerKey = process.env.NOMSOD_OWNER_KEY || pairingToken;
 const publicBase = (process.env.NOMSOD_PUBLIC_BASE_URL || `http://${host}:${port}`).replace(/\/$/, "");
-const controlKey = "nsc_" + randomBytes(32).toString("base64url");
+const controlKey = loadOrCreateControlKey(root);
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, {
@@ -86,6 +109,14 @@ await oauth.initialize();
 
 const hub = new AgentHub(registry, pairingToken);
 const releaseManager = new ReleaseManager(root);
+const enrollment = new EnrollmentService(
+  root,
+  publicBase,
+  pairingToken,
+  ownerKey,
+  port,
+  peerPort
+);
 const runtimeManager = new RuntimeManager(
   root,
   controlPort,
@@ -108,6 +139,16 @@ const controlServer = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/devices") {
       sendJson(res, 200, { devices: hub.listDevices() });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/enrollment/invite") {
+      const body = await readJsonBody(req, 16 * 1024);
+      const platformRaw = String(body.platform || "any").toLowerCase();
+      const platform: EnrollmentPlatform =
+        platformRaw === "windows" || platformRaw === "macos" ? platformRaw : "any";
+      const ttlSeconds = typeof body.ttlSeconds === "number" ? body.ttlSeconds : 600;
+      sendJson(res, 200, enrollment.createInvite(platform, ttlSeconds));
       return;
     }
 
@@ -179,6 +220,25 @@ const publicServer = http.createServer(async (req, res) => {
       publicBase,
       runtime: runtimeManager.status().active
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/enroll/bootstrap") {
+    const auth = String(req.headers.authorization || "");
+    const match = auth.match(/^Bearer\s+(.+)$/i);
+    if (!match) {
+      sendJson(res, 401, { error: "invalid_enrollment_token" });
+      return;
+    }
+
+    const platform = (url.searchParams.get("platform") || "").toLowerCase();
+    const bundle = await enrollment.bootstrap(match[1], platform);
+    if (!bundle) {
+      sendJson(res, 401, { error: "invalid_or_expired_enrollment_token" });
+      return;
+    }
+
+    sendJson(res, 200, bundle);
     return;
   }
 

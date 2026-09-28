@@ -335,6 +335,10 @@ if [ "$MODE" = "both" ] || [ "$MODE" = "agent" ]; then
   install_user_agent com.nomsod.mcp.agent "$ROOT/dist/bootstrap/agent.js" agent "$AGENT_NODE"
 fi
 
+if [ -f "$ROOT/scripts/macos/install-cloudflared-background.sh" ]; then
+  /bin/sh "$ROOT/scripts/macos/install-cloudflared-background.sh" "$ROOT" "$NO_START"
+fi
+
 CONTROL_LABEL=com.nomsod.mcp.control
 CONTROL_PLIST="$LAUNCH_DIR/$CONTROL_LABEL.plist"
 CONTROL_BIN_X=$(xml_escape "$CONTROL_BIN")

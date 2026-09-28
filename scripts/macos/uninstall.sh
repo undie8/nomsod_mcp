@@ -35,5 +35,6 @@ fi
 remove_user com.nomsod.mcp.control
 remove_user com.nomsod.mcp.updater
 remove_user com.nomsod.mcp.watchdog
+remove_user com.nomsod.mcp.cloudflared
 
 echo "Nomsod data, releases, .env and device identity were preserved."

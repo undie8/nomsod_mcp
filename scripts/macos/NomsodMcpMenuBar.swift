@@ -78,6 +78,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keys.target = self
         menu.addItem(keys)
 
+        let enroll = NSMenuItem(title: "Add new computer", action: nil, keyEquivalent: "")
+        let enrollMenu = NSMenu(title: "Add new computer")
+
+        let enrollWindows = NSMenuItem(title: "Copy Windows install command", action: #selector(copyWindowsEnrollment), keyEquivalent: "")
+        enrollWindows.target = self
+        enrollMenu.addItem(enrollWindows)
+
+        let enrollMac = NSMenuItem(title: "Copy macOS install command", action: #selector(copyMacEnrollment), keyEquivalent: "")
+        enrollMac.target = self
+        enrollMenu.addItem(enrollMac)
+
+        enroll.submenu = enrollMenu
+        menu.addItem(enroll)
+
         let copyUrl = NSMenuItem(title: "Copy MCP URL", action: #selector(copyMcpUrl), keyEquivalent: "")
         copyUrl.target = self
         menu.addItem(copyUrl)
@@ -181,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshStatus() {
         env = readEnv()
-        let port = Int(env["NOMSOD_AGENT_GUARDIAN_HEALTH_PORT"] ?? "3232") ?? 3232
+        let port = Int(env["NOMSOD_AGENT_GUARDIAN_HEALTH_PORT"] ?? "34122") ?? 34122
         let agentJson = httpGet("http://127.0.0.1:\(port)/health")
         let agentOk = boolValue(agentJson, key: "ok")
         let connected = boolValue(agentJson, key: "gatewayConnected")
@@ -366,6 +380,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(value, forType: .string)
         }
+    }
+
+    @objc private func copyWindowsEnrollment() {
+        Task { await copyEnrollmentCommand(platform: "windows") }
+    }
+
+    @objc private func copyMacEnrollment() {
+        Task { await copyEnrollmentCommand(platform: "macos") }
+    }
+
+    private func copyEnrollmentCommand(platform: String) async {
+        refreshStatus()
+
+        guard let controlKey = readControlKey(), !controlKey.isEmpty else {
+            showEnrollmentError("Local control key is unavailable. Restart Supervisor once and try again.")
+            return
+        }
+
+        let controlPort = Int(env["NOMSOD_CONTROL_PORT"] ?? "34102") ?? 34102
+        guard let url = URL(string: "http://127.0.0.1:\(controlPort)/enrollment/invite") else {
+            showEnrollmentError("Invalid local control URL.")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 5
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(controlKey, forHTTPHeaderField: "X-Nomsod-Control-Key")
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: [
+                "platform": platform,
+                "ttlSeconds": 600
+            ])
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                showEnrollmentError("Supervisor rejected the enrollment request.")
+                return
+            }
+
+            guard
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let command = json[platform == "macos" ? "macosCommand" : "windowsCommand"] as? String,
+                !command.isEmpty
+            else {
+                showEnrollmentError("Supervisor did not return an enrollment command.")
+                return
+            }
+
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+
+            let alert = NSAlert()
+            alert.messageText = "Enrollment command copied"
+            alert.informativeText = "\(platform == "macos" ? "macOS" : "Windows") install command is on the clipboard. The invite expires in 10 minutes."
+            alert.runModal()
+        } catch {
+            showEnrollmentError(error.localizedDescription)
+        }
+    }
+
+    private func readControlKey() -> String? {
+        let path = repoRoot + "/data/control.key"
+        guard let value = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func showEnrollmentError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Could not create enrollment command"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     @objc private func copyMcpUrl() {

@@ -63,6 +63,15 @@ namespace NomsodMcpControl
             revealKeysItem.Click += delegate { RevealKeys(); };
             menu.Items.Add(revealKeysItem);
 
+            var enrollMenu = new ToolStripMenuItem("Add new computer");
+            var enrollWindows = new ToolStripMenuItem("Copy Windows install command");
+            enrollWindows.Click += delegate { CopyEnrollmentCommand("windows"); };
+            enrollMenu.DropDownItems.Add(enrollWindows);
+            var enrollMac = new ToolStripMenuItem("Copy macOS install command");
+            enrollMac.Click += delegate { CopyEnrollmentCommand("macos"); };
+            enrollMenu.DropDownItems.Add(enrollMac);
+            menu.Items.Add(enrollMenu);
+
             var copyUrlItem = new ToolStripMenuItem("Copy MCP URL");
             copyUrlItem.Click += delegate {
                 Clipboard.SetText(GetPublicMcpUrl());
@@ -246,6 +255,51 @@ namespace NomsodMcpControl
 
         private string GetPublicMcpUrl() { return GetPublicBaseUrl() + "/mcp"; }
 
+        private void CopyEnrollmentCommand(string platform)
+        {
+            try
+            {
+                env = ReadEnv(Path.Combine(root, ".env"));
+                int controlPort = ParseInt(GetEnv("NOMSOD_CONTROL_PORT", "34102"), 34102);
+                string controlKeyPath = Path.Combine(root, "data", "control.key");
+                string controlKey = SafeReadAllText(controlKeyPath).Trim();
+
+                if (String.IsNullOrWhiteSpace(controlKey))
+                    throw new InvalidOperationException("Local control key is not available. Restart Supervisor once and try again.");
+
+                string body = "{\"platform\":\"" + platform + "\",\"ttlSeconds\":600}";
+                string json = HttpPostJson(
+                    "http://127.0.0.1:" + controlPort + "/enrollment/invite",
+                    body,
+                    controlKey,
+                    4000
+                );
+
+                string property = platform == "macos" ? "macosCommand" : "windowsCommand";
+                string command = JsonString(json, property);
+                if (String.IsNullOrWhiteSpace(command))
+                    throw new InvalidOperationException("Supervisor did not return an enrollment command.");
+
+                Clipboard.SetText(command);
+                tray.ShowBalloonTip(
+                    2500,
+                    "Nomsod MCP",
+                    (platform == "macos" ? "macOS" : "Windows") +
+                    " enrollment command copied. It expires in 10 minutes.",
+                    ToolTipIcon.Info
+                );
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Could not create enrollment command.\r\n\r\n" + ex.Message,
+                    "Nomsod MCP",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
         private string GetEnv(string key, string fallback)
         {
             string v;
@@ -284,6 +338,25 @@ namespace NomsodMcpControl
                     return sr.ReadToEnd();
             }
             catch { return null; }
+        }
+
+        private static string HttpPostJson(string url, string body, string controlKey, int timeoutMs)
+        {
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.Method = "POST";
+            req.ContentType = "application/json";
+            req.Timeout = timeoutMs;
+            req.ReadWriteTimeout = timeoutMs;
+            req.Headers["X-Nomsod-Control-Key"] = controlKey;
+
+            byte[] bytes = Encoding.UTF8.GetBytes(body);
+            req.ContentLength = bytes.Length;
+            using (var stream = req.GetRequestStream())
+                stream.Write(bytes, 0, bytes.Length);
+
+            using (var res = (HttpWebResponse)req.GetResponse())
+            using (var sr = new StreamReader(res.GetResponseStream(), Encoding.UTF8))
+                return sr.ReadToEnd();
         }
 
         private static string JsonString(string json, string key)
