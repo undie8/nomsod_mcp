@@ -1,0 +1,46 @@
+$ErrorActionPreference = "Stop"
+
+$SelfUrl = "__SELF_URL__"
+$BaseUrl = "__BASE_URL__"
+
+function Test-IsAdministrator {
+  $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = [Security.Principal.WindowsPrincipal]::new($current)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdministrator)) {
+  $elevatedScript = Join-Path $env:TEMP ("nomsod-bootstrap-" + [guid]::NewGuid().ToString("N") + ".ps1")
+  Invoke-WebRequest -UseBasicParsing -Uri $SelfUrl -OutFile $elevatedScript
+  try {
+    $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
+      "-NoLogo","-NoProfile","-ExecutionPolicy","Bypass","-File",$elevatedScript
+    )
+    exit $p.ExitCode
+  } finally {
+    Remove-Item $elevatedScript -Force -ErrorAction SilentlyContinue
+  }
+}
+
+$work = Join-Path $env:TEMP ("nomsod-public-bootstrap-" + [guid]::NewGuid().ToString("N"))
+$zip = Join-Path $work "bundle.zip"
+$bundle = Join-Path $work "bundle"
+
+try {
+  New-Item -ItemType Directory -Force -Path $work,$bundle | Out-Null
+  Write-Host "Downloading Nomsod MCP bootstrap..."
+  Invoke-WebRequest -UseBasicParsing -Headers @{ "Cache-Control" = "no-store" } -Uri ($BaseUrl + "/bundle.zip") -OutFile $zip
+  Expand-Archive -LiteralPath $zip -DestinationPath $bundle -Force
+
+  $bootstrap = Join-Path $bundle "distribution\install\windows.ps1"
+  if (-not (Test-Path $bootstrap)) {
+    throw "Downloaded Nomsod bootstrap bundle is incomplete."
+  }
+
+  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $bootstrap -RecoveryBundleRoot $bundle
+  if ($LASTEXITCODE -ne 0) {
+    throw "Nomsod MCP installation failed with exit code $LASTEXITCODE."
+  }
+} finally {
+  Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+}

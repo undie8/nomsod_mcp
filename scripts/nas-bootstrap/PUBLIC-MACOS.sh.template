@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+BASE_URL="__BASE_URL__"
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/nomsod-public-bootstrap.XXXXXX")
+ZIP="$WORK/bundle.zip"
+BUNDLE="$WORK/bundle"
+trap 'rm -rf "$WORK"' EXIT HUP INT TERM
+
+mkdir -p "$BUNDLE"
+echo "Downloading Nomsod MCP bootstrap..."
+/usr/bin/curl -fsSL --retry 3 --connect-timeout 15 -H 'Cache-Control: no-store' "$BASE_URL/bundle.zip" -o "$ZIP"
+/usr/bin/ditto -x -k "$ZIP" "$BUNDLE"
+
+BOOTSTRAP="$BUNDLE/distribution/install/macos.sh"
+[ -f "$BOOTSTRAP" ] || { echo "Downloaded Nomsod bootstrap bundle is incomplete." >&2; exit 2; }
+
+NOMSOD_RECOVERY_ROOT="$BUNDLE" /bin/sh "$BOOTSTRAP"

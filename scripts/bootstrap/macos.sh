@@ -45,6 +45,8 @@ read_secret() {
 }
 
 RECOVERY_DISTRIBUTION=
+BOOTSTRAP_TOKEN=
+NAS_BOOTSTRAP_INTERNAL_URL=
 if [ -n "$RECOVERY_ROOT" ]; then
   RECOVERY_ROOT=$(cd "$RECOVERY_ROOT" && pwd)
   RECOVERY_JSON="$RECOVERY_ROOT/recovery.json"
@@ -90,6 +92,13 @@ if [ -n "$RECOVERY_ROOT" ]; then
   PEER_PORT=${PEER_PORT:-34104}
   RECOVERY_DISTRIBUTION="$RECOVERY_ROOT/distribution"
   [ -d "$RECOVERY_DISTRIBUTION" ] || { echo "Recovery kit is incomplete: distribution directory is missing." >&2; exit 15; }
+  if [ -f "$RECOVERY_ROOT/bootstrap-token.txt" ]; then
+    BOOTSTRAP_TOKEN=$(tr -d '\r\n\t ' < "$RECOVERY_ROOT/bootstrap-token.txt")
+    printf '%s' "$BOOTSTRAP_TOKEN" | /usr/bin/grep -Eq '^[A-Za-z0-9_-]{32,128}$' || { echo "Recovery bootstrap token is invalid." >&2; exit 18; }
+  fi
+  if [ -f "$RECOVERY_ROOT/nas-bootstrap-internal-url.txt" ]; then
+    NAS_BOOTSTRAP_INTERNAL_URL=$(tr -d '\r\n\t ' < "$RECOVERY_ROOT/nas-bootstrap-internal-url.txt")
+  fi
   RECOVERY_MODE=1
   echo "Recovery kit accepted. Restoring existing cluster $CLUSTER_ID without contacting an old Nomsod computer."
 fi
@@ -224,6 +233,21 @@ mkdir -p "$INSTALL_ROOT"
 if [ -n "$RECOVERY_DISTRIBUTION" ]; then
   mkdir -p "$INSTALL_ROOT/data/distribution"
   cp -R "$RECOVERY_DISTRIBUTION"/. "$INSTALL_ROOT/data/distribution/"
+
+  if [ -n "$BOOTSTRAP_TOKEN" ]; then
+    BOOTSTRAP_SOURCE="$RECOVERY_ROOT/bootstrap-public/$BOOTSTRAP_TOKEN"
+    BOOTSTRAP_TARGET="$INSTALL_ROOT/data/bootstrap-public/$BOOTSTRAP_TOKEN"
+    mkdir -p "$BOOTSTRAP_TARGET"
+    for name in windows.ps1 macos.sh; do
+      [ -f "$BOOTSTRAP_SOURCE/$name" ] && cp "$BOOTSTRAP_SOURCE/$name" "$BOOTSTRAP_TARGET/$name"
+    done
+    BOOTSTRAP_ZIP="$BOOTSTRAP_TARGET/bundle.zip"
+    rm -f "$BOOTSTRAP_ZIP"
+    (
+      cd "$RECOVERY_ROOT"
+      /usr/bin/zip -qry "$BOOTSTRAP_ZIP" .
+    )
+  fi
 fi
 
 for item in "$RELEASE_ROOT"/* "$RELEASE_ROOT"/.[!.]* "$RELEASE_ROOT"/..?*; do
@@ -245,6 +269,7 @@ if [ ! -f "$ENVFILE" ]; then
       printf '%s\n' "NOMSOD_GATEWAY_HOST=127.0.0.1"
       printf '%s\n' "NOMSOD_GATEWAY_PORT=$GATEWAY_PORT"
       printf '%s\n' "NOMSOD_PUBLIC_BASE_URL=$PUBLIC_BASE"
+      if [ -n "$NAS_BOOTSTRAP_INTERNAL_URL" ]; then printf '%s\n' "NOMSOD_NAS_BOOTSTRAP_INTERNAL_URL=$NAS_BOOTSTRAP_INTERNAL_URL"; fi
       printf '%s\n' "NOMSOD_OWNER_KEY=$OWNER_KEY"
       if [ -n "$CLUSTER_KEY" ]; then printf '%s\n' "NOMSOD_CLUSTER_KEY=$CLUSTER_KEY"; fi
       printf '%s\n' "NOMSOD_RUNTIME_PORT_A=$((GATEWAY_PORT + 1))"

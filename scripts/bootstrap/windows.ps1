@@ -101,6 +101,8 @@ $CloudflareTunnelId = ""
 $CloudflareCredentialsBase64 = ""
 $CloudflareHealthUrl = ""
 $RecoveryDistribution = ""
+$BootstrapToken = ""
+$NasBootstrapInternalUrl = ""
 
 if ($RecoveryBundleRoot) {
   $RecoveryBundleRoot = [IO.Path]::GetFullPath($RecoveryBundleRoot)
@@ -145,6 +147,18 @@ if ($RecoveryBundleRoot) {
   $RecoveryDistribution = Join-Path $RecoveryBundleRoot "distribution"
   if (-not (Test-Path $RecoveryDistribution)) {
     throw "Recovery kit is incomplete: distribution directory is missing."
+  }
+
+  $bootstrapTokenFile = Join-Path $RecoveryBundleRoot "bootstrap-token.txt"
+  if (Test-Path $bootstrapTokenFile) {
+    $BootstrapToken = ([IO.File]::ReadAllText($bootstrapTokenFile)).Trim()
+    if ($BootstrapToken -notmatch '^[A-Za-z0-9_-]{32,128}$') {
+      throw "Recovery bootstrap token is invalid."
+    }
+  }
+  $nasBootstrapUrlFile = Join-Path $RecoveryBundleRoot "nas-bootstrap-internal-url.txt"
+  if (Test-Path $nasBootstrapUrlFile) {
+    $NasBootstrapInternalUrl = ([IO.File]::ReadAllText($nasBootstrapUrlFile)).Trim().TrimEnd("/")
   }
 
   $RecoveryMode = $true
@@ -288,6 +302,19 @@ try {
     $localDistribution = Join-Path $InstallRoot "data\distribution"
     New-Item -ItemType Directory -Force -Path $localDistribution | Out-Null
     Copy-Item (Join-Path $RecoveryDistribution "*") $localDistribution -Recurse -Force
+
+    if ($BootstrapToken) {
+      $bootstrapSource = Join-Path $RecoveryBundleRoot ("bootstrap-public\" + $BootstrapToken)
+      $bootstrapTarget = Join-Path $InstallRoot ("data\bootstrap-public\" + $BootstrapToken)
+      New-Item -ItemType Directory -Force -Path $bootstrapTarget | Out-Null
+      foreach ($name in @("windows.ps1", "macos.sh")) {
+        $source = Join-Path $bootstrapSource $name
+        if (Test-Path $source) { Copy-Item $source (Join-Path $bootstrapTarget $name) -Force }
+      }
+      $bootstrapZip = Join-Path $bootstrapTarget "bundle.zip"
+      Remove-Item $bootstrapZip -Force -ErrorAction SilentlyContinue
+      Compress-Archive -Path (Join-Path $RecoveryBundleRoot "*") -DestinationPath $bootstrapZip -CompressionLevel Optimal
+    }
   }
 
   Get-ChildItem $releaseRoot -Force | ForEach-Object {
@@ -327,6 +354,7 @@ try {
       $lines.Add("NOMSOD_GATEWAY_HOST=127.0.0.1")
       $lines.Add("NOMSOD_GATEWAY_PORT=$GatewayPort")
       $lines.Add("NOMSOD_PUBLIC_BASE_URL=$PublicBaseUrl")
+      if ($NasBootstrapInternalUrl) { $lines.Add("NOMSOD_NAS_BOOTSTRAP_INTERNAL_URL=$NasBootstrapInternalUrl") }
       $lines.Add("NOMSOD_OWNER_KEY=$OwnerKey")
       if ($ClusterKey) { $lines.Add("NOMSOD_CLUSTER_KEY=$ClusterKey") }
       $lines.Add("NOMSOD_RUNTIME_PORT_A=$($GatewayPort + 1)")

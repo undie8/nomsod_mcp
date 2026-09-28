@@ -10,7 +10,7 @@ import { DeviceRegistry } from "../gateway/registry.js";
 import { ReleaseManager } from "./release-manager.js";
 import { RuntimeManager } from "./runtime-manager.js";
 import { getNomsodVersion } from "../shared/version.js";
-import { serveDistribution } from "./distribution.js";
+import { serveBootstrapPublic, serveDistribution } from "./distribution.js";
 import { createDistributionPeerResolver } from "./distribution-peers.js";
 import { EnrollmentService, type EnrollmentPlatform } from "./enrollment.js";
 import { resolveClusterId } from "../shared/single-cluster.js";
@@ -74,6 +74,7 @@ const publicBase = (process.env.NOMSOD_PUBLIC_BASE_URL || `http://${host}:${port
 const clusterId = resolveClusterId();
 const resolveDistributionPeers = createDistributionPeerResolver(peerPort, clusterId);
 const controlKey = loadOrCreateControlKey(root);
+const nasBootstrapInternalUrl = (process.env.NOMSOD_NAS_BOOTSTRAP_INTERNAL_URL || "http://100.111.178.74:34150").trim().replace(/\/$/, "");
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, {
@@ -212,6 +213,7 @@ const publicServer = http.createServer(async (req, res) => {
     return;
   }
 
+  if (await serveBootstrapPublic(req, res, url, root, nasBootstrapInternalUrl || undefined)) return;
   if (await serveDistribution(req, res, url, root, resolveDistributionPeers)) return;
 
   if (url.pathname === "/health") {

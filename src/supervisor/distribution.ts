@@ -57,7 +57,7 @@ function contentTypeFor(file: string): string {
 }
 
 function cacheControlFor(pathname: string): string {
-  return pathname.startsWith("/releases/latest/") || pathname.startsWith("/install/")
+  return pathname.startsWith("/releases/latest/") || pathname.startsWith("/install/") || pathname.startsWith("/bootstrap/")
     ? "no-store, max-age=0"
     : "public, max-age=31536000, immutable";
 }
@@ -277,6 +277,46 @@ function platformForLatest(pathname: string): "windows" | "macos" | undefined {
   if (pathname === "/releases/latest/windows.json") return "windows";
   if (pathname === "/releases/latest/macos.json") return "macos";
   return undefined;
+}
+
+export async function serveBootstrapPublic(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  root: string,
+  fallbackBase?: string
+): Promise<boolean> {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  if (!url.pathname.startsWith("/bootstrap/")) return false;
+
+  const relative = url.pathname.slice("/bootstrap/".length);
+  if (!relative || relative.includes("..")) {
+    res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "invalid_bootstrap_path" }));
+    return true;
+  }
+
+  const baseDir = path.join(root, "data", "bootstrap-public");
+  const file = safePath(baseDir, relative);
+  if (!file) {
+    res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "invalid_bootstrap_path" }));
+    return true;
+  }
+
+  if (await serveLocalFile(req, res, url.pathname, file)) return true;
+
+  const base = (fallbackBase || "").replace(/\/$/, "");
+  if (base) {
+    if (await proxyPeerFile(req, res, url.pathname + url.search, base)) return true;
+  }
+
+  res.writeHead(404, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  res.end(JSON.stringify({ error: "bootstrap_not_found" }));
+  return true;
 }
 
 export async function serveDistribution(

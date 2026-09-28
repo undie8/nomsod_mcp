@@ -2,7 +2,9 @@ param(
   [string]$RuntimeRoot = "",
   [string]$NasSshHost = "100.111.178.74",
   [string]$NasSshUser = "gunn",
-  [string]$NasPath = "/volume1/docker/nomsod-bootstrap"
+  [string]$NasPath = "/volume1/docker/nomsod-bootstrap",
+  [string]$PublicBaseUrl = "https://mcp.nomsod.net",
+  [string]$InternalBootstrapUrl = "http://100.111.178.74:34150"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,9 +24,21 @@ $extract = Join-Path $work "extract"
 $packageRoot = Join-Path $work "current"
 $archive = Join-Path $work "nomsod-bootstrap-current.tar.gz"
 $scriptRoot = [IO.Path]::GetFullPath($PSScriptRoot)
+$utf8 = New-Object Text.UTF8Encoding($false)
+
+$ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
+$scp = (Get-Command scp.exe -ErrorAction Stop).Source
+$remote = "$NasSshUser@$NasSshHost"
 
 try {
   New-Item -ItemType Directory -Force -Path $work,$extract,$packageRoot | Out-Null
+
+  $tokenCommand = "set -eu; mkdir -p '$NasPath'; chmod 750 '$NasPath'; if [ ! -s '$NasPath/bootstrap-token' ]; then python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > '$NasPath/bootstrap-token'; chmod 600 '$NasPath/bootstrap-token'; fi; cat '$NasPath/bootstrap-token'"
+  $tokenOutput = & $ssh -o BatchMode=yes -o ConnectTimeout=8 $remote $tokenCommand
+  if ($LASTEXITCODE -ne 0) { throw "Could not read or create NAS bootstrap token." }
+  $bootstrapToken = ([string]($tokenOutput | Select-Object -Last 1)).Trim()
+  if ($bootstrapToken -notmatch '^[A-Za-z0-9_-]{32,128}$') { throw "NAS bootstrap token is invalid." }
+
   & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $exporter -Root $RuntimeRoot -Destination $zip -Force | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Could not export the cluster bootstrap bundle." }
 
@@ -32,10 +46,37 @@ try {
   $bundleSource = Join-Path $extract "Nomsod-Recovery-Kit"
   if (-not (Test-Path $bundleSource)) { throw "Exported bootstrap bundle is incomplete." }
 
+  [IO.File]::WriteAllText((Join-Path $bundleSource "bootstrap-token.txt"), $bootstrapToken + [Environment]::NewLine, $utf8)
+  [IO.File]::WriteAllText((Join-Path $bundleSource "nas-bootstrap-internal-url.txt"), $InternalBootstrapUrl.TrimEnd("/") + [Environment]::NewLine, $utf8)
+
+  $baseUrl = $PublicBaseUrl.TrimEnd("/") + "/bootstrap/" + $bootstrapToken
+  $bundlePublicDir = Join-Path $bundleSource ("bootstrap-public\" + $bootstrapToken)
+  New-Item -ItemType Directory -Force -Path $bundlePublicDir | Out-Null
+  $winTemplate = [IO.File]::ReadAllText((Join-Path $scriptRoot "PUBLIC-WINDOWS.ps1.template"))
+  $macTemplate = [IO.File]::ReadAllText((Join-Path $scriptRoot "PUBLIC-MACOS.sh.template"))
+  $winScript = $winTemplate.Replace("__BASE_URL__", $baseUrl).Replace("__SELF_URL__", $baseUrl + "/windows.ps1")
+  $macScript = $macTemplate.Replace("__BASE_URL__", $baseUrl)
+  [IO.File]::WriteAllText((Join-Path $bundlePublicDir "windows.ps1"), $winScript, $utf8)
+  [IO.File]::WriteAllText((Join-Path $bundlePublicDir "macos.sh"), $macScript, $utf8)
+
   foreach ($file in @("INSTALL-WINDOWS.cmd","INSTALL-WINDOWS.ps1","INSTALL-MACOS.command","INSTALL-MACOS.sh","README.txt")) {
     Copy-Item (Join-Path $scriptRoot $file) (Join-Path $packageRoot $file) -Force
   }
   Copy-Item $bundleSource (Join-Path $packageRoot "bundle") -Recurse -Force
+
+  $runtimeConfig = Join-Path $packageRoot "runtime-config"
+  New-Item -ItemType Directory -Force -Path $runtimeConfig | Out-Null
+  foreach ($file in @("nginx.conf","cloudflared.yml.template","provision-edge.sh")) {
+    Copy-Item (Join-Path $scriptRoot $file) (Join-Path $runtimeConfig $file) -Force
+  }
+
+  $publicDir = Join-Path $packageRoot ("public\bootstrap\" + $bootstrapToken)
+  New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
+  Copy-Item (Join-Path $bundlePublicDir "windows.ps1") (Join-Path $publicDir "windows.ps1") -Force
+  Copy-Item (Join-Path $bundlePublicDir "macos.sh") (Join-Path $publicDir "macos.sh") -Force
+  Compress-Archive -Path (Join-Path $bundleSource "*") -DestinationPath (Join-Path $publicDir "bundle.zip") -CompressionLevel Optimal
+  [IO.File]::WriteAllText((Join-Path $publicDir "windows-command.txt"), ("irm " + $baseUrl + "/windows.ps1 | iex" + [Environment]::NewLine), $utf8)
+  [IO.File]::WriteAllText((Join-Path $publicDir "macos-command.txt"), ("curl -fsSL " + $baseUrl + "/macos.sh | sh" + [Environment]::NewLine), $utf8)
 
   $recovery = [IO.File]::ReadAllText((Join-Path $bundleSource "recovery.json")) | ConvertFrom-Json
   $status = [ordered]@{
@@ -46,28 +87,25 @@ try {
     version = if ([string]$recovery.distribution.windowsVersion -eq [string]$recovery.distribution.macosVersion) { [string]$recovery.distribution.windowsVersion } else { $version }
     windowsVersion = [string]$recovery.distribution.windowsVersion
     macosVersion = [string]$recovery.distribution.macosVersion
+    publicBootstrap = $true
     updatedAt = [DateTime]::UtcNow.ToString("o")
   }
-  [IO.File]::WriteAllText((Join-Path $packageRoot "STATUS.json"),($status | ConvertTo-Json -Depth 4),(New-Object Text.UTF8Encoding($false)))
+  [IO.File]::WriteAllText((Join-Path $packageRoot "STATUS.json"),($status | ConvertTo-Json -Depth 4),$utf8)
 
   $tar = (Get-Command tar.exe -ErrorAction Stop).Source
   & $tar -czf $archive -C $packageRoot .
   if ($LASTEXITCODE -ne 0) { throw "Could not package NAS bootstrap authority." }
 
-  $ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
-  $scp = (Get-Command scp.exe -ErrorAction Stop).Source
-  $remote = "$NasSshUser@$NasSshHost"
   $remoteArchive = "$NasPath/.incoming.tar.gz"
-
-  & $ssh -o BatchMode=yes -o ConnectTimeout=8 $remote "mkdir -p '$NasPath' && chmod 700 '$NasPath'"
-  if ($LASTEXITCODE -ne 0) { throw "Could not prepare NAS bootstrap directory." }
-
   & $scp -O -q -o BatchMode=yes -o ConnectTimeout=8 $archive "${remote}:$remoteArchive"
   if ($LASTEXITCODE -ne 0) { throw "Could not upload NAS bootstrap authority." }
 
-  $activate = "set -eu; rm -rf '$NasPath/current.new'; mkdir -p '$NasPath/current.new'; /usr/bin/tar -xzf '$remoteArchive' -C '$NasPath/current.new'; rm -f '$remoteArchive'; rm -rf '$NasPath/previous'; if [ -d '$NasPath/current' ]; then mv '$NasPath/current' '$NasPath/previous'; fi; mv '$NasPath/current.new' '$NasPath/current'; find '$NasPath/current' -type d -exec chmod 750 {} \;; find '$NasPath/current' -type f -exec chmod 640 {} \;; chmod 750 '$NasPath/current/INSTALL-MACOS.command' '$NasPath/current/INSTALL-MACOS.sh'; chmod 750 '$NasPath/current/bundle/RECOVER-MACOS.sh' 2>/dev/null || true; chmod 750 '$NasPath'"
+  $activate = "set -eu; rm -rf '$NasPath/current.new'; mkdir -p '$NasPath/current.new'; /usr/bin/tar -xzf '$remoteArchive' -C '$NasPath/current.new'; rm -f '$remoteArchive'; rm -rf '$NasPath/previous'; if [ -d '$NasPath/current' ]; then mv '$NasPath/current' '$NasPath/previous'; fi; mv '$NasPath/current.new' '$NasPath/current'; find '$NasPath/current' -type d -exec chmod 750 {} \;; find '$NasPath/current' -type f -exec chmod 640 {} \;; chmod 750 '$NasPath/current/INSTALL-MACOS.command' '$NasPath/current/INSTALL-MACOS.sh' '$NasPath/current/runtime-config/provision-edge.sh'; chmod 750 '$NasPath/current/bundle/RECOVER-MACOS.sh' 2>/dev/null || true; chmod 750 '$NasPath'"
   & $ssh -o BatchMode=yes -o ConnectTimeout=8 $remote $activate
   if ($LASTEXITCODE -ne 0) { throw "NAS bootstrap upload succeeded, but activation failed." }
+
+  & $ssh -o BatchMode=yes -o ConnectTimeout=8 $remote "sh '$NasPath/current/runtime-config/provision-edge.sh' '$NasPath' '100.111.178.74'"
+  if ($LASTEXITCODE -ne 0) { throw "NAS bootstrap authority was updated, but public edge provisioning failed." }
 
   Write-Host "Nomsod NAS bootstrap authority updated."
   Write-Host "NAS: KKSM2 / KKS"
@@ -75,6 +113,7 @@ try {
   Write-Host ("Version: {0}" -f $status.version)
   Write-Host "Windows SMB: \\KKS\docker\nomsod-bootstrap\current\INSTALL-WINDOWS.cmd"
   Write-Host "macOS SMB: smb://KKS/docker/nomsod-bootstrap/current"
+  Write-Host "Public PowerShell bootstrap: ready"
 } finally {
   Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
