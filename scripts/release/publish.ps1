@@ -1,6 +1,7 @@
 param(
   [string]$Root = "",
-  [string]$PublicBaseUrl = "https://mcp.nomsod.net"
+  [string]$PublicBaseUrl = "https://mcp.nomsod.net",
+  [string]$DistributionTarget = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,11 @@ if (-not $Root) {
 $version = ([IO.File]::ReadAllText((Join-Path $Root "VERSION"))).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') {
   throw "VERSION must contain a semantic version such as 0.2.0"
+}
+
+$packageVersion = (Get-Content (Join-Path $Root "package.json") -Raw | ConvertFrom-Json).version
+if ($packageVersion -ne $version) {
+  throw "VERSION ($version) must match package.json version ($packageVersion)"
 }
 
 Set-Location $Root
@@ -30,6 +36,10 @@ $distribution = Join-Path $Root "data\distribution"
 $releaseDir = Join-Path $distribution ("releases\" + $version)
 $latestDir = Join-Path $distribution "releases\latest"
 $installDir = Join-Path $distribution "install"
+
+if ((Test-Path $releaseDir) -and (Get-ChildItem $releaseDir -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+  throw "Release $version already exists. Bump VERSION before publishing; versioned artifacts are immutable."
+}
 
 New-Item -ItemType Directory -Force -Path $releaseDir,$latestDir,$installDir | Out-Null
 
@@ -120,6 +130,42 @@ $macJson = $macManifest | ConvertTo-Json -Depth 5
 [IO.File]::WriteAllText((Join-Path $latestDir "windows.json"), $windowsJson + [Environment]::NewLine, $utf8)
 [IO.File]::WriteAllText((Join-Path $latestDir "macos.json"), $macJson + [Environment]::NewLine, $utf8)
 
+$promotedTo = ""
+if ($DistributionTarget) {
+  $sourceDistribution = [IO.Path]::GetFullPath($distribution)
+  $targetDistribution = [IO.Path]::GetFullPath($DistributionTarget)
+
+  if ($targetDistribution -ne $sourceDistribution) {
+    $targetReleaseDir = Join-Path $targetDistribution ("releases\" + $version)
+    $targetLatestDir = Join-Path $targetDistribution "releases\latest"
+    $targetInstallDir = Join-Path $targetDistribution "install"
+    New-Item -ItemType Directory -Force -Path $targetReleaseDir,$targetLatestDir,$targetInstallDir | Out-Null
+
+    foreach ($sourceFile in Get-ChildItem $releaseDir -File) {
+      $targetFile = Join-Path $targetReleaseDir $sourceFile.Name
+      if (Test-Path $targetFile) {
+        $sourceHash = (Get-FileHash -Algorithm SHA256 -Path $sourceFile.FullName).Hash
+        $targetHash = (Get-FileHash -Algorithm SHA256 -Path $targetFile).Hash
+        if ($sourceHash -ne $targetHash) {
+          throw "Refusing to replace immutable release file with different content: $targetFile"
+        }
+      } else {
+        Copy-Item $sourceFile.FullName $targetFile
+      }
+    }
+
+    Copy-Item (Join-Path $installDir "windows.ps1") (Join-Path $targetInstallDir "windows.ps1") -Force
+    Copy-Item (Join-Path $installDir "macos.sh") (Join-Path $targetInstallDir "macos.sh") -Force
+
+    # Publish latest pointers last so clients cannot observe a manifest before its immutable artifacts exist.
+    Copy-Item (Join-Path $latestDir "windows.json") (Join-Path $targetLatestDir "windows.json") -Force
+    Copy-Item (Join-Path $latestDir "macos.json") (Join-Path $targetLatestDir "macos.json") -Force
+    $promotedTo = $targetDistribution
+  } else {
+    $promotedTo = $sourceDistribution
+  }
+}
+
 Write-Host ""
 Write-Host "Nomsod MCP v$version release built."
 Write-Host "Windows: $windowsArchive"
@@ -127,3 +173,4 @@ Write-Host "  SHA256: $windowsSha"
 Write-Host "macOS:   $macArchive"
 Write-Host "  SHA256: $macSha"
 Write-Host "Distribution: $distribution"
+if ($promotedTo) { Write-Host "Promoted to:  $promotedTo" }

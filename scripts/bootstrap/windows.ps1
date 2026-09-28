@@ -8,7 +8,8 @@ param(
   [string]$OwnerKey = "",
   [string]$ClusterKey = "",
   [string]$DeviceName = "",
-  [string]$EnrollmentToken = ""
+  [string]$EnrollmentToken = "",
+  [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,7 +131,7 @@ if ($Role -in @("Agent", "Both") -and -not $PairingKey) {
   if ($env:NOMSOD_PAIRING_TOKEN) {
     $PairingKey = $env:NOMSOD_PAIRING_TOKEN
   } else {
-    $PairingKey = Read-Secret "Nomsod MCP `airing key"
+    $PairingKey = Read-Secret "Nomsod MCP pairing key"
   }
 }
 

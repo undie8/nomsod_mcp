@@ -366,6 +366,18 @@ Each installation creates an updater that checks the platform-specific latest ma
 
 An update is applied only after its package SHA-256 matches the manifest. `.env`, device identity, `data/`, logs and the portable runtime are preserved. Windows and macOS packages are independent, so either platform can be released without replacing the other package.
 
+### Publishing a release
+
+Keep `VERSION`, `package.json` and `package-lock.json` on the same semantic version. Versioned artifacts are immutable: the publisher refuses to rebuild a version whose release directory already contains files.
+
+On the Windows gateway that serves the public distribution, build and promote in one command:
+
+```powershell
+.\scripts\release\publish.ps1 -DistributionTarget (Join-Path $env:LOCALAPPDATA 'Nomsod MCP\data\distribution')
+```
+
+Promotion copies the immutable versioned artifacts first, then the installer scripts, and updates `releases/latest/*.json` last. This prevents clients from observing a latest manifest before the referenced archives are available.
+
 ## Deliberate non-goals
 
 Nomsod MCP does not connect to 9Router and does not route AI-model or image-generation traffic.
