@@ -1,6 +1,6 @@
 {
   "name": "nomsod-mcp",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "description": "Cross-platform multi-computer MCP gateway and agent for ChatGPT",
