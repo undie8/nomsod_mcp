@@ -98,6 +98,9 @@ cp -R "$APP_BUNDLE" "$INSTALL_APP"
 
 /usr/bin/codesign --force --deep --sign -   --identifier "net.nomsod.mcp.control"   --requirements '=designated => identifier "net.nomsod.mcp.control"'   "$INSTALL_APP"
 
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [ -x "$LSREGISTER" ]; then "$LSREGISTER" -f "$INSTALL_APP" >/dev/null 2>&1 || true; fi
+
 rm -rf "$ICONSET"
 echo "Built: $APP_BUNDLE"
 echo "Installed: $INSTALL_APP"

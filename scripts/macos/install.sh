@@ -99,6 +99,7 @@ cd "$ROOT"
 
 echo "Building Nomsod MCP Control..."
 /bin/sh "$ROOT/scripts/macos/build-control.sh" "$ROOT"
+chmod 700 "$ROOT/scripts/macos/Nomsod MCP Updater" 2>/dev/null || true
 
 RUNTIME_DIR="$ROOT/.runtime"
 ROLE_APP_DIR="$RUNTIME_DIR/apps"
@@ -160,6 +161,8 @@ EOF
 
   /usr/bin/plutil -lint "$CONTENTS/Info.plist" >/dev/null
   /usr/bin/codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$APP" >/dev/null
+  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [ -x "$LSREGISTER" ]; then "$LSREGISTER" -f "$APP" >/dev/null 2>&1 || true; fi
   printf '%s' "$BINARY"
 }
 
@@ -203,6 +206,7 @@ write_plist() {
   ERR=$4
   PLIST=$5
   EXECUTABLE=$6
+  ASSOCIATED_BUNDLE_ID=$7
 
   NODE_X=$(xml_escape "$EXECUTABLE")
   SCRIPT_X=$(xml_escape "$SCRIPT")
@@ -210,6 +214,7 @@ write_plist() {
   OUT_X=$(xml_escape "$OUT")
   ERR_X=$(xml_escape "$ERR")
   LABEL_X=$(xml_escape "$LABEL")
+  ASSOCIATED_X=$(xml_escape "$ASSOCIATED_BUNDLE_ID")
 
   cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -218,6 +223,10 @@ write_plist() {
 <dict>
   <key>Label</key>
   <string>$LABEL_X</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>$ASSOCIATED_X</string>
+  </array>
   <key>ProgramArguments</key>
   <array>
     <string>$NODE_X</string>
@@ -254,8 +263,9 @@ install_user_agent() {
   PLIST="$LAUNCH_DIR/$LABEL.plist"
 
   EXECUTABLE=$4
+  BUNDLE_ID=$5
 
-  write_plist "$LABEL" "$SCRIPT" "$LOG_DIR/launchd-$NAME.out.log" "$LOG_DIR/launchd-$NAME.err.log" "$PLIST" "$EXECUTABLE"
+  write_plist "$LABEL" "$SCRIPT" "$LOG_DIR/launchd-$NAME.out.log" "$LOG_DIR/launchd-$NAME.err.log" "$PLIST" "$EXECUTABLE" "$BUNDLE_ID"
   validate_plist "$PLIST"
 
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -311,7 +321,7 @@ if [ "$MODE" = "both" ] || [ "$MODE" = "supervisor" ]; then
   if [ "$SYSTEM_SUPERVISOR" -eq 1 ]; then
     LABEL=com.nomsod.mcp.supervisor
     TEMP="$SERVICE_DIR/$LABEL.plist"
-    write_plist "$LABEL" "$ROOT/dist/bootstrap/supervisor.js" "$LOG_DIR/launchd-supervisor.out.log" "$LOG_DIR/launchd-supervisor.err.log" "$TEMP" "$SUPERVISOR_NODE"
+    write_plist "$LABEL" "$ROOT/dist/bootstrap/supervisor.js" "$LOG_DIR/launchd-supervisor.out.log" "$LOG_DIR/launchd-supervisor.err.log" "$TEMP" "$SUPERVISOR_NODE" "net.nomsod.mcp.supervisor"
     validate_plist "$TEMP"
 
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -327,12 +337,12 @@ if [ "$MODE" = "both" ] || [ "$MODE" = "supervisor" ]; then
       fi
     fi
   else
-    install_user_agent com.nomsod.mcp.supervisor "$ROOT/dist/bootstrap/supervisor.js" supervisor "$SUPERVISOR_NODE"
+    install_user_agent com.nomsod.mcp.supervisor "$ROOT/dist/bootstrap/supervisor.js" supervisor "$SUPERVISOR_NODE" "net.nomsod.mcp.supervisor"
   fi
 fi
 
 if [ "$MODE" = "both" ] || [ "$MODE" = "agent" ]; then
-  install_user_agent com.nomsod.mcp.agent "$ROOT/dist/bootstrap/agent.js" agent "$AGENT_NODE"
+  install_user_agent com.nomsod.mcp.agent "$ROOT/dist/bootstrap/agent.js" agent "$AGENT_NODE" "net.nomsod.mcp.agent"
 fi
 
 if [ -f "$ROOT/scripts/macos/install-cloudflared-background.sh" ]; then
@@ -353,6 +363,10 @@ cat > "$CONTROL_PLIST" <<EOF
 <dict>
   <key>Label</key>
   <string>$CONTROL_LABEL</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>net.nomsod.mcp.control</string>
+  </array>
   <key>ProgramArguments</key>
   <array>
     <string>$CONTROL_BIN_X</string>
@@ -386,107 +400,21 @@ else
   fi
 fi
 
-UPDATER_RUNNER="$ROOT/scripts/macos/Nomsod MCP Updater"
-WATCHDOG_RUNNER="$ROOT/scripts/macos/Nomsod MCP Watchdog"
-chmod 700 "$UPDATER_RUNNER" "$WATCHDOG_RUNNER"
-
-UPDATER_LABEL=com.nomsod.mcp.updater
-UPDATER_PLIST="$LAUNCH_DIR/$UPDATER_LABEL.plist"
-UPDATER_RUNNER_X=$(xml_escape "$UPDATER_RUNNER")
-ROOT_X=$(xml_escape "$ROOT")
-UPDATER_OUT_X=$(xml_escape "$LOG_DIR/launchd-updater.out.log")
-UPDATER_ERR_X=$(xml_escape "$LOG_DIR/launchd-updater.err.log")
-
-cat > "$UPDATER_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$UPDATER_LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$UPDATER_RUNNER_X</string>
-    <string>$ROOT_X</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>60</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$UPDATER_OUT_X</string>
-  <key>StandardErrorPath</key>
-  <string>$UPDATER_ERR_X</string>
-</dict>
-</plist>
-EOF
-
-validate_plist "$UPDATER_PLIST"
-
-if [ "$DRY_RUN" -eq 1 ]; then
-  echo "[dry-run] would install $UPDATER_LABEL from $UPDATER_PLIST"
-else
-  if [ "$NO_START" -eq 0 ]; then
-    if /bin/launchctl print "$DOMAIN/$UPDATER_LABEL" >/dev/null 2>&1; then
-      if [ "${NOMSOD_UPDATE_IN_PROGRESS:-0}" != "1" ]; then
-        /bin/launchctl kickstart -k "$DOMAIN/$UPDATER_LABEL"
-      fi
-    else
-      sleep 1
-      /bin/launchctl bootstrap "$DOMAIN" "$UPDATER_PLIST"
-    fi
+# Updater and watchdog are now owned by the Supervisor process.
+# Remove the legacy LaunchAgent plists so Login Items contains only
+# Supervisor, Agent, and Control.
+for LEGACY_LABEL in com.nomsod.mcp.updater com.nomsod.mcp.watchdog; do
+  LEGACY_PLIST="$LAUNCH_DIR/$LEGACY_LABEL.plist"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] would remove legacy $LEGACY_LABEL"
+    continue
   fi
-fi
-WATCHDOG_LABEL=com.nomsod.mcp.watchdog
-WATCHDOG_PLIST="$LAUNCH_DIR/$WATCHDOG_LABEL.plist"
-WATCHDOG_RUNNER_X=$(xml_escape "$WATCHDOG_RUNNER")
-ROOT_X=$(xml_escape "$ROOT")
-DOMAIN_X=$(xml_escape "$DOMAIN")
-OUT_X=$(xml_escape "$LOG_DIR/launchd-watchdog.out.log")
-ERR_X=$(xml_escape "$LOG_DIR/launchd-watchdog.err.log")
-CHECK_SUPERVISOR=1
-if [ "$SYSTEM_SUPERVISOR" -eq 1 ]; then CHECK_SUPERVISOR=0; fi
 
-cat > "$WATCHDOG_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$WATCHDOG_LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$WATCHDOG_RUNNER_X</string>
-    <string>$ROOT_X</string>
-    <string>$DOMAIN_X</string>
-    <string>$CHECK_SUPERVISOR</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>60</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$OUT_X</string>
-  <key>StandardErrorPath</key>
-  <string>$ERR_X</string>
-</dict>
-</plist>
-EOF
-
-validate_plist "$WATCHDOG_PLIST"
-
-if [ "$DRY_RUN" -eq 1 ]; then
-  echo "[dry-run] would install $WATCHDOG_LABEL from $WATCHDOG_PLIST"
-else
-  if [ "$NO_START" -eq 0 ]; then
-    if /bin/launchctl print "$DOMAIN/$WATCHDOG_LABEL" >/dev/null 2>&1; then
-      /bin/launchctl kickstart -k "$DOMAIN/$WATCHDOG_LABEL"
-    else
-      sleep 1
-      /bin/launchctl bootstrap "$DOMAIN" "$WATCHDOG_PLIST"
-    fi
+  rm -f "$LEGACY_PLIST"
+  if [ "${NOMSOD_UPDATE_IN_PROGRESS:-0}" != "1" ] || [ "$LEGACY_LABEL" != "com.nomsod.mcp.updater" ]; then
+    /bin/launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
   fi
-fi
+done
 
 if [ "$DRY_RUN" -ne 1 ]; then
   printf '%s\n' "$MODE" > "$ROOT/data/install-role.txt"

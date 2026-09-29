@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
@@ -74,6 +75,82 @@ const publicBase = (process.env.NOMSOD_PUBLIC_BASE_URL || `http://${host}:${port
 const clusterId = resolveClusterId();
 const resolveDistributionPeers = createDistributionPeerResolver(peerPort, clusterId);
 const controlKey = loadOrCreateControlKey(root);
+const macHousekeepingIntervalMs = Number(process.env.NOMSOD_HOUSEKEEPING_INTERVAL_MS || 60_000);
+const agentHealthPort = Number(process.env.NOMSOD_AGENT_GUARDIAN_HEALTH_PORT || 3232);
+let macHousekeepingTimers: NodeJS.Timeout[] = [];
+
+function launchDetached(command: string, args: string[]): void {
+  try {
+    const child = spawn(command, args, {
+      cwd: root,
+      detached: true,
+      stdio: "ignore",
+      env: process.env
+    });
+    child.unref();
+  } catch (error) {
+    console.warn(`[supervisor] detached launch failed: ${command}: ${String(error)}`);
+  }
+}
+
+function isHealthy(url: string, timeoutMs = 5_000): Promise<boolean> {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const req = http.get(url, res => {
+      res.resume();
+      finish(Boolean(res.statusCode && res.statusCode >= 200 && res.statusCode < 400));
+    });
+
+    req.on("error", () => finish(false));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      finish(false);
+    });
+  });
+}
+
+function startMacHousekeeping(): void {
+  if (process.platform !== "darwin") return;
+
+  const updaterRunner = path.resolve(root, "scripts", "macos", "Nomsod MCP Updater");
+  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "";
+
+  const runUpdater = () => {
+    if (!existsSync(updaterRunner)) return;
+    launchDetached(updaterRunner, [root]);
+  };
+
+  const checkAgent = async () => {
+    const healthy = await isHealthy(`http://127.0.0.1:${agentHealthPort}/health`);
+    if (healthy || !domain) return;
+    console.warn("[supervisor] agent health check failed; requesting launchd restart");
+    launchDetached("/bin/launchctl", ["kickstart", "-k", `${domain}/com.nomsod.mcp.agent`]);
+  };
+
+  const cleanupLegacyJobs = () => {
+    if (!domain) return;
+    for (const label of ["com.nomsod.mcp.updater", "com.nomsod.mcp.watchdog"]) {
+      launchDetached("/bin/launchctl", ["bootout", `${domain}/${label}`]);
+    }
+  };
+
+  const initial = setTimeout(() => {
+    runUpdater();
+    void checkAgent();
+  }, 15_000);
+  const updaterTimer = setInterval(runUpdater, macHousekeepingIntervalMs);
+  const watchdogTimer = setInterval(() => void checkAgent(), macHousekeepingIntervalMs);
+  const cleanupTimer = setTimeout(cleanupLegacyJobs, 30_000);
+
+  for (const timer of [initial, updaterTimer, watchdogTimer, cleanupTimer]) timer.unref();
+  macHousekeepingTimers = [initial, updaterTimer, watchdogTimer, cleanupTimer];
+}
 
 function sendJson(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, {
@@ -322,6 +399,8 @@ publicServer.keepAliveTimeout = 65_000;
 publicServer.headersTimeout = 70_000;
 publicServer.requestTimeout = 310_000;
 
+startMacHousekeeping();
+
 publicServer.listen(port, host, () => {
   console.log(`[supervisor] node=${nodeName}`);
   console.log(`[supervisor] cluster=${clusterId}`);
@@ -337,6 +416,8 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
 
   console.log("[supervisor] shutting down");
+  for (const timer of macHousekeepingTimers) clearTimeout(timer);
+  macHousekeepingTimers = [];
   await runtimeManager.shutdown();
 
   await Promise.all([
