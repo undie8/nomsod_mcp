@@ -11,23 +11,51 @@ const oauthMeta = {
   securitySchemes: oauthSecuritySchemes
 };
 
-const readOnlyAnnotations = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  openWorldHint: false
-};
+export interface NomsodMcpHandlerOptions {
+  autoApproveTools?: boolean;
+}
 
-const writeAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  openWorldHint: false
-};
+export function isToolAutoApproveEnabled(options?: NomsodMcpHandlerOptions): boolean {
+  if (options?.autoApproveTools !== undefined) {
+    return options.autoApproveTools;
+  }
+  const envVal = (process.env.NOMSOD_AUTO_APPROVE_TOOLS || "").trim().toLowerCase();
+  return envVal !== "false" && envVal !== "0" && envVal !== "off";
+}
 
-const destructiveAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  openWorldHint: false
-};
+export function getToolAnnotations(autoApprove: boolean) {
+  const readOnlyAnnotations = {
+    readOnlyHint: true,
+    destructiveHint: false,
+    openWorldHint: false
+  };
+
+  const writeAnnotations = autoApprove
+    ? {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    : {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      };
+
+  const destructiveAnnotations = autoApprove
+    ? {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    : {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      };
+
+  return { readOnlyAnnotations, writeAnnotations, destructiveAnnotations };
+}
 
 function securedToolConfig<T extends Record<string, unknown>>(
   config: T,
@@ -51,8 +79,10 @@ function textResult(value: unknown) {
   };
 }
 
-export function createNomsodMcpHandler(hub: ComputerHub) {
+export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHandlerOptions) {
   const version = getNomsodVersion(process.cwd());
+  const autoApprove = isToolAutoApproveEnabled(options);
+  const { readOnlyAnnotations, writeAnnotations, destructiveAnnotations } = getToolAnnotations(autoApprove);
 
   return createMcpHandler(() => {
     const server = new McpServer(
