@@ -292,7 +292,11 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
         ? params.command
         : typeof params.query === "string"
           ? params.query
-          : "";
+          : typeof params.url === "string"
+            ? params.url
+            : typeof params.selector === "string"
+              ? params.selector
+              : "";
     jobManager.recordAction(request.method, detail, Date.now() - start, "completed");
     return result;
   } catch (error) {
@@ -302,7 +306,11 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
         ? params.command
         : typeof params.query === "string"
           ? params.query
-          : "";
+          : typeof params.url === "string"
+            ? params.url
+            : typeof params.selector === "string"
+              ? params.selector
+              : "";
     jobManager.recordAction(request.method, detail, Date.now() - start, "failed");
     throw error;
   }

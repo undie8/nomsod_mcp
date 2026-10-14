@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { readUtf8TextFile, writeUtf8TextFile } from "../shared/text-codec.js";
 import { searchFiles } from "./search-helper.js";
 import { captureScreenshot, readImageFile } from "./visual-helper.js";
+import { browserManager } from "./browser-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -257,6 +258,39 @@ export async function executeAction(method: string, rawParams: unknown): Promise
     case "desktop.screenshot": {
       const screenMode = params.screenMode === "virtual" ? "virtual" : "primary";
       return captureScreenshot({ screenMode });
+    }
+
+    case "browser.navigate": {
+      const url = requiredString(params, "url");
+      const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
+      return browserManager.navigate({ url, timeoutMs });
+    }
+
+    case "browser.click": {
+      const selector = requiredString(params, "selector");
+      const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
+      return browserManager.click({ selector, timeoutMs });
+    }
+
+    case "browser.type": {
+      const selector = requiredString(params, "selector");
+      const text = typeof params.text === "string" ? params.text : "";
+      const clearFirst = typeof params.clearFirst === "boolean" ? params.clearFirst : true;
+      return browserManager.type({ selector, text, clearFirst });
+    }
+
+    case "browser.snapshot": {
+      const maxDepth = typeof params.maxDepth === "number" ? params.maxDepth : undefined;
+      return browserManager.snapshot({ maxDepth });
+    }
+
+    case "browser.screenshot": {
+      const fullPage = typeof params.fullPage === "boolean" ? params.fullPage : false;
+      return browserManager.screenshot({ fullPage });
+    }
+
+    case "browser.close": {
+      return browserManager.close();
     }
 
     default:

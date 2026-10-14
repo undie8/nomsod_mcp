@@ -313,6 +313,169 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
     );
 
     server.registerTool(
+      "browser_navigate",
+      securedToolConfig(
+        {
+          title: "Navigate browser to URL",
+          description:
+            "Navigate the browser page to a specified URL with optional timeout. Automatically launches an isolated headless browser session if not already running.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            url: z.string().min(1),
+            timeoutMs: z.number().int().min(100).optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, url, timeoutMs }) =>
+        textResult(
+          await hub.request(deviceId, "browser.navigate", {
+            url,
+            timeoutMs: timeoutMs ?? 30000
+          })
+        )
+    );
+
+    server.registerTool(
+      "browser_click",
+      securedToolConfig(
+        {
+          title: "Click browser element",
+          description: "Click an element matching the CSS selector in the browser page.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            selector: z.string().min(1),
+            timeoutMs: z.number().int().min(100).optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, selector, timeoutMs }) =>
+        textResult(
+          await hub.request(deviceId, "browser.click", {
+            selector,
+            timeoutMs
+          })
+        )
+    );
+
+    server.registerTool(
+      "browser_type",
+      securedToolConfig(
+        {
+          title: "Type text into browser element",
+          description:
+            "Type text into an input or textarea element matching the CSS selector in the browser page, with optional clearing.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            selector: z.string().min(1),
+            text: z.string(),
+            clearFirst: z.boolean().optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, selector, text, clearFirst }) =>
+        textResult(
+          await hub.request(deviceId, "browser.type", {
+            selector,
+            text,
+            clearFirst: clearFirst ?? true
+          })
+        )
+    );
+
+    server.registerTool(
+      "browser_snapshot",
+      securedToolConfig(
+        {
+          title: "Get browser page and console snapshot",
+          description:
+            "Retrieve page title, URL, simplified DOM HTML snippet, and accumulated browser console logs/JavaScript errors.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            maxDepth: z.number().int().min(1).max(10).optional()
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, maxDepth }) =>
+        textResult(
+          await hub.request(deviceId, "browser.snapshot", {
+            maxDepth
+          })
+        )
+    );
+
+    server.registerTool(
+      "browser_screenshot",
+      securedToolConfig(
+        {
+          title: "Take browser web page screenshot",
+          description:
+            "Take a screenshot of the current browser web page (viewport or full-page) and return standard MCP image content.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            fullPage: z.boolean().optional()
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, fullPage }) => {
+        const res = (await hub.request(deviceId, "browser.screenshot", {
+          fullPage: fullPage ?? false
+        })) as {
+          base64: string;
+          mimeType?: string;
+          bytes?: number;
+          width?: number;
+          height?: number;
+        };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  fullPage: fullPage ?? false,
+                  bytes: res.bytes,
+                  width: res.width,
+                  height: res.height
+                },
+                null,
+                2
+              )
+            },
+            {
+              type: "image" as const,
+              data: res.base64,
+              mimeType: res.mimeType || "image/png"
+            }
+          ]
+        };
+      }
+    );
+
+    server.registerTool(
+      "browser_close",
+      securedToolConfig(
+        {
+          title: "Close browser session",
+          description:
+            "Close the headless browser session and release associated process and memory resources on the target device.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1)
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId }) =>
+        textResult(
+          await hub.request(deviceId, "browser.close")
+        )
+    );
+
+    server.registerTool(
       "patch_text_file",
       securedToolConfig(
         {
