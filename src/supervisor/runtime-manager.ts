@@ -357,7 +357,50 @@ export class RuntimeManager {
         host: `127.0.0.1:${runtime.port}`
       }
     }, upstreamRes => {
+      const contentType = String(upstreamRes.headers["content-type"] || "");
+      const isSse = contentType.includes("text/event-stream");
+
       res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+
+      let sseTimer: NodeJS.Timeout | undefined = undefined;
+
+      if (isSse) {
+        const resetSseTimer = () => {
+          if (sseTimer) {
+            clearTimeout(sseTimer);
+            sseTimer = undefined;
+          }
+          if (!finished) {
+            sseTimer = setTimeout(() => {
+              if (!finished && !res.writableEnded) {
+                res.write(": ping\n\n");
+                resetSseTimer();
+              }
+            }, 15_000);
+            if (typeof sseTimer.unref === "function") {
+              sseTimer.unref();
+            }
+          }
+        };
+        resetSseTimer();
+
+        upstreamRes.on("data", () => {
+          resetSseTimer();
+        });
+
+        const clearSseTimer = () => {
+          if (sseTimer) {
+            clearTimeout(sseTimer);
+            sseTimer = undefined;
+          }
+        };
+
+        upstreamRes.on("end", clearSseTimer);
+        upstreamRes.on("close", clearSseTimer);
+        res.on("finish", clearSseTimer);
+        res.on("close", clearSseTimer);
+      }
+
       upstreamRes.pipe(res);
       upstreamRes.on("end", finish);
       upstreamRes.on("close", finish);

@@ -19,6 +19,7 @@ namespace NomsodMcpControl
         private readonly ToolStripMenuItem statusItem;
         private readonly ToolStripMenuItem deviceItem;
         private readonly ToolStripMenuItem gatewayItem;
+        private readonly ToolStripMenuItem jobsItem;
         private readonly ToolStripMenuItem agentRestartItem;
         private readonly ToolStripMenuItem supervisorRestartItem;
         private readonly Icon appIcon;
@@ -53,6 +54,14 @@ namespace NomsodMcpControl
             gatewayItem = new ToolStripMenuItem("Gateway: checking...");
             gatewayItem.Enabled = false;
             menu.Items.Add(gatewayItem);
+
+            jobsItem = new ToolStripMenuItem("Active Jobs: checking...");
+            jobsItem.Enabled = false;
+            menu.Items.Add(jobsItem);
+
+            var liveMonitorItem = new ToolStripMenuItem("Active Jobs & Live Monitor...");
+            liveMonitorItem.Click += delegate { ShowJobsMonitorForm(); };
+            menu.Items.Add(liveMonitorItem);
 
             menu.Items.Add(new ToolStripSeparator());
 
@@ -145,6 +154,7 @@ namespace NomsodMcpControl
                 string agentJson = HttpGet("http://127.0.0.1:" + agentPort + "/health", 1500);
                 bool guardianOk = agentJson != null && agentJson.Contains("\"ok\":true");
                 bool gatewayConnected = guardianOk && agentJson.Contains("\"gatewayConnected\":true");
+                int activeJobs = (int)JsonLong(agentJson, "activeJobs", 0);
 
                 string identityPath = GetIdentityPath();
                 string identityJson = File.Exists(identityPath) ? SafeReadAllText(identityPath) : "";
@@ -156,6 +166,7 @@ namespace NomsodMcpControl
                 statusItem.Text = gatewayConnected ? "Status: Online" : guardianOk ? "Status: Agent running / Gateway offline" : "Status: Offline";
                 deviceItem.Text = "Device: " + displayName + "  [" + ShortId(deviceId) + "]";
                 gatewayItem.Text = "Gateway: " + GetEnv("NOMSOD_GATEWAY_WS", "(not configured)");
+                jobsItem.Text = activeJobs > 0 ? "Active Jobs: " + activeJobs + " running" : "Active Jobs: None";
 
                 tray.Icon = appIcon;
                 tray.Text = gatewayConnected ? "Nomsod MCP - Online" : "Nomsod MCP - Offline";
@@ -762,6 +773,350 @@ namespace NomsodMcpControl
                 if (!p.WaitForExit(timeout)) return -1;
                 return p.ExitCode;
             }
+        }
+
+        private class JobItem
+        {
+            public string JobId { get; set; }
+            public string Command { get; set; }
+            public string Status { get; set; }
+            public string Pid { get; set; }
+            public long DurationMs { get; set; }
+            public string StdoutTail { get; set; }
+            public string StderrTail { get; set; }
+        }
+
+        private void ShowJobsMonitorForm()
+        {
+            int agentPort = ParseInt(GetEnv("NOMSOD_AGENT_GUARDIAN_HEALTH_PORT", "3232"), 3232);
+
+            using (var form = new Form())
+            {
+                form.Text = "Nomsod MCP - Active Jobs & Live Monitor";
+                form.FormBorderStyle = FormBorderStyle.Sizable;
+                form.StartPosition = FormStartPosition.CenterScreen;
+                form.ClientSize = new Size(780, 520);
+                form.MinimumSize = new Size(680, 460);
+                form.Icon = appIcon;
+                form.Font = new Font("Segoe UI", 9.5f);
+
+                var pnlBottom = new Panel() {
+                    Dock = DockStyle.Bottom,
+                    Height = 48
+                };
+                form.Controls.Add(pnlBottom);
+
+                var listView = new ListView() {
+                    Dock = DockStyle.Top,
+                    Height = 180,
+                    View = View.Details,
+                    FullRowSelect = true,
+                    GridLines = true
+                };
+                listView.Columns.Add("Status", 90);
+                listView.Columns.Add("Duration", 80);
+                listView.Columns.Add("Command", 310);
+                listView.Columns.Add("PID", 65);
+                listView.Columns.Add("Job ID", 180);
+                form.Controls.Add(listView);
+
+                var txtOutput = new TextBox() {
+                    Dock = DockStyle.Fill,
+                    Multiline = true,
+                    ReadOnly = true,
+                    ScrollBars = ScrollBars.Vertical,
+                    Font = new Font("Consolas", 9.5f),
+                    BackColor = Color.FromArgb(30, 30, 30),
+                    ForeColor = Color.FromArgb(212, 212, 212)
+                };
+                form.Controls.Add(txtOutput);
+
+                var chkAuto = new CheckBox() {
+                    Text = "Auto-refresh (1s)",
+                    Checked = true,
+                    Left = 12, Top = 12,
+                    Width = 135, Height = 24
+                };
+                pnlBottom.Controls.Add(chkAuto);
+
+                var btnCancel = new Button() {
+                    Text = "Cancel Job",
+                    Left = 155, Top = 9,
+                    Width = 95, Height = 32
+                };
+                pnlBottom.Controls.Add(btnCancel);
+
+                var btnCopy = new Button() {
+                    Text = "Copy Output",
+                    Left = 258, Top = 9,
+                    Width = 105, Height = 32
+                };
+                pnlBottom.Controls.Add(btnCopy);
+
+                var btnRefresh = new Button() {
+                    Text = "Refresh",
+                    Left = 371, Top = 9,
+                    Width = 85, Height = 32
+                };
+                pnlBottom.Controls.Add(btnRefresh);
+
+                var btnClose = new Button() {
+                    Text = "Close",
+                    Left = 672, Top = 9,
+                    Width = 90, Height = 32,
+                    DialogResult = DialogResult.OK
+                };
+                pnlBottom.Controls.Add(btnClose);
+                form.CancelButton = btnClose;
+
+                Dictionary<string, JobItem> currentJobsMap = new Dictionary<string, JobItem>();
+
+                Action loadJobs = delegate {
+                    try
+                    {
+                        string json = HttpGet("http://127.0.0.1:" + agentPort + "/jobs", 1500);
+                        var items = ParseJobs(json);
+
+                        string selectedJobId = null;
+                        if (listView.SelectedItems.Count > 0)
+                        {
+                            selectedJobId = listView.SelectedItems[0].Tag as string;
+                        }
+
+                        listView.BeginUpdate();
+                        listView.Items.Clear();
+                        currentJobsMap.Clear();
+
+                        foreach (var job in items)
+                        {
+                            currentJobsMap[job.JobId] = job;
+                            string statusText = (job.Status ?? "unknown").ToUpper();
+                            string durationText = FormatDuration(job.DurationMs);
+                            string pidText = String.IsNullOrEmpty(job.Pid) ? "-" : job.Pid;
+
+                            var item = new ListViewItem(new string[] {
+                                statusText,
+                                durationText,
+                                job.Command ?? "",
+                                pidText,
+                                job.JobId ?? ""
+                            });
+                            item.Tag = job.JobId;
+
+                            if (statusText == "RUNNING")
+                            {
+                                item.ForeColor = Color.FromArgb(0, 122, 204);
+                            }
+                            else if (statusText == "COMPLETED")
+                            {
+                                item.ForeColor = Color.FromArgb(40, 167, 69);
+                            }
+                            else if (statusText == "CANCELLED" || statusText == "FAILED")
+                            {
+                                item.ForeColor = Color.FromArgb(220, 53, 69);
+                            }
+
+                            listView.Items.Add(item);
+
+                            if (job.JobId == selectedJobId)
+                            {
+                                item.Selected = true;
+                            }
+                        }
+
+                        if (listView.SelectedItems.Count == 0 && listView.Items.Count > 0)
+                        {
+                            listView.Items[0].Selected = true;
+                        }
+                        listView.EndUpdate();
+                    }
+                    catch
+                    {
+                    }
+                };
+
+                listView.SelectedIndexChanged += delegate {
+                    if (listView.SelectedItems.Count > 0)
+                    {
+                        string jobId = listView.SelectedItems[0].Tag as string;
+                        JobItem job;
+                        if (jobId != null && currentJobsMap.TryGetValue(jobId, out job))
+                        {
+                            string outText = job.StdoutTail ?? "";
+                            if (!String.IsNullOrEmpty(job.StderrTail))
+                            {
+                                outText += "\r\n--- STDERR ---\r\n" + job.StderrTail;
+                            }
+                            txtOutput.Text = outText;
+                            if (outText.Length > 0)
+                            {
+                                txtOutput.SelectionStart = outText.Length;
+                                txtOutput.ScrollToCaret();
+                            }
+                        }
+                    }
+                    else
+                    {
+                        txtOutput.Text = "";
+                    }
+                };
+
+                btnRefresh.Click += delegate {
+                    loadJobs();
+                };
+
+                btnCancel.Click += delegate {
+                    if (listView.SelectedItems.Count == 0)
+                    {
+                        MessageBox.Show("Please select a job to cancel.", "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                    string jobId = listView.SelectedItems[0].Tag as string;
+                    if (String.IsNullOrEmpty(jobId)) return;
+
+                    try
+                    {
+                        string body = "{\"jobId\":\"" + jobId + "\"}";
+                        HttpPostJson("http://127.0.0.1:" + agentPort + "/jobs/cancel", body, "", 2000);
+                        loadJobs();
+                        MessageBox.Show("Cancel requested for job " + jobId, "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("Could not cancel job: " + ex.Message, "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                };
+
+                btnCopy.Click += delegate {
+                    if (!String.IsNullOrEmpty(txtOutput.Text))
+                    {
+                        Clipboard.SetText(txtOutput.Text);
+                        btnCopy.Text = "Copied!";
+                        var t = new Timer() { Interval = 1500 };
+                        t.Tick += delegate { btnCopy.Text = "Copy Output"; t.Stop(); t.Dispose(); };
+                        t.Start();
+                    }
+                };
+
+                var formTimer = new Timer() { Interval = 1000 };
+                formTimer.Tick += delegate {
+                    if (chkAuto.Checked && form.Visible)
+                    {
+                        loadJobs();
+                    }
+                };
+                formTimer.Start();
+
+                form.FormClosed += delegate {
+                    formTimer.Stop();
+                    formTimer.Dispose();
+                };
+
+                loadJobs();
+                form.ShowDialog();
+            }
+        }
+
+        private static string FormatDuration(long ms)
+        {
+            if (ms < 1000) return ms + "ms";
+            long s = ms / 1000;
+            if (s < 60) return s + "s";
+            long m = s / 60;
+            s = s % 60;
+            return m + "m " + s + "s";
+        }
+
+        private static List<JobItem> ParseJobs(string json)
+        {
+            var list = new List<JobItem>();
+            if (String.IsNullOrWhiteSpace(json)) return list;
+
+            int idx = json.IndexOf("\"jobs\"");
+            if (idx < 0) return list;
+            int startArr = json.IndexOf('[', idx);
+            if (startArr < 0) return list;
+            int endArr = json.LastIndexOf(']');
+            if (endArr <= startArr) return list;
+
+            string arrayContent = json.Substring(startArr + 1, endArr - startArr - 1);
+            var jsonObjects = ExtractJsonObjects(arrayContent);
+
+            foreach (string objJson in jsonObjects)
+            {
+                var job = new JobItem();
+                job.JobId = JsonString(objJson, "jobId");
+                job.Command = JsonString(objJson, "command");
+                job.Status = JsonString(objJson, "status");
+                long pidVal = JsonLong(objJson, "pid", 0);
+                job.Pid = pidVal > 0 ? pidVal.ToString() : JsonString(objJson, "pid");
+                if (String.IsNullOrEmpty(job.Pid)) job.Pid = "-";
+                job.DurationMs = JsonLong(objJson, "durationMs", 0);
+                job.StdoutTail = JsonString(objJson, "stdoutTail");
+                job.StderrTail = JsonString(objJson, "stderrTail");
+
+                if (!String.IsNullOrEmpty(job.JobId))
+                {
+                    list.Add(job);
+                }
+            }
+            return list;
+        }
+
+        private static List<string> ExtractJsonObjects(string jsonArrayContent)
+        {
+            var objects = new List<string>();
+            int depth = 0;
+            int start = -1;
+            bool inString = false;
+            bool escaped = false;
+
+            for (int i = 0; i < jsonArrayContent.Length; i++)
+            {
+                char c = jsonArrayContent[i];
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inString = !inString;
+                    continue;
+                }
+                if (!inString)
+                {
+                    if (c == '{')
+                    {
+                        if (depth == 0) start = i;
+                        depth++;
+                    }
+                    else if (c == '}')
+                    {
+                        depth--;
+                        if (depth == 0 && start >= 0)
+                        {
+                            objects.Add(jsonArrayContent.Substring(start, i - start + 1));
+                            start = -1;
+                        }
+                    }
+                }
+            }
+            return objects;
+        }
+
+        private static long JsonLong(string json, string key, long fallback)
+        {
+            if (String.IsNullOrWhiteSpace(json)) return fallback;
+            var m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(?<v>-?\\d+)");
+            if (!m.Success) return fallback;
+            long v;
+            return Int64.TryParse(m.Groups["v"].Value, out v) ? v : fallback;
         }
 
         private void ExitControl()

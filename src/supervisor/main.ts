@@ -224,6 +224,11 @@ const controlServer = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/jobs") {
+      sendJson(res, 200, { jobs: hub.listDevices() });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/enrollment/invite") {
       const body = await readJsonBody(req, 16 * 1024);
       const platformRaw = String(body.platform || "any").toLowerCase();
@@ -333,6 +338,28 @@ const publicServer = http.createServer(async (req, res) => {
       return;
     }
     sendJson(res, 200, { devices: hub.listDevices() });
+    return;
+  }
+
+  if (url.pathname === "/jobs" && req.method === "GET") {
+    const remote = req.socket.remoteAddress || "";
+    const isLocal = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+    if (!isLocal && !(await oauth.isAuthorized(req))) {
+      oauth.challenge(res);
+      return;
+    }
+    const devices = hub.listDevices();
+    const results = await Promise.all(
+      devices.map(async d => {
+        try {
+          const res = (await hub.request(d.deviceId, "job.list", undefined, 3000)) as { jobs?: unknown[] };
+          return { deviceId: d.deviceId, hostname: d.hostname, jobs: res?.jobs || [] };
+        } catch {
+          return { deviceId: d.deviceId, hostname: d.hostname, jobs: [] };
+        }
+      })
+    );
+    sendJson(res, 200, { ok: true, devicesCount: devices.length, devices: results });
     return;
   }
 

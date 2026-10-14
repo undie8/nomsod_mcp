@@ -272,6 +272,70 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
     );
 
     server.registerTool(
+      "execute_command_async",
+      securedToolConfig(
+        {
+          title: "Execute command asynchronously",
+          description:
+            "Start a shell command asynchronously on a connected computer and return a jobId for status tracking.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            command: z.string().min(1),
+            cwd: z.string().optional(),
+            shell: z.string().optional(),
+            timeoutMs: z.number().int().min(1000).optional()
+          })
+        },
+        destructiveAnnotations
+      ),
+      async ({ deviceId, command, cwd, shell, timeoutMs }) =>
+        textResult(
+          await hub.request(deviceId, "job.start", { command, cwd, shell, timeoutMs })
+        )
+    );
+
+    server.registerTool(
+      "get_command_status",
+      securedToolConfig(
+        {
+          title: "Get asynchronous command status",
+          description:
+            "Retrieve the current status and output lines of a running or completed asynchronous job.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            jobId: z.string().min(1),
+            maxLines: z.number().int().min(1).max(500).optional()
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, jobId, maxLines }) =>
+        textResult(
+          await hub.request(deviceId, "job.status", { jobId, maxLines })
+        )
+    );
+
+    server.registerTool(
+      "cancel_command",
+      securedToolConfig(
+        {
+          title: "Cancel asynchronous command",
+          description:
+            "Cancel a running asynchronous command job on a connected computer.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            jobId: z.string().min(1)
+          })
+        },
+        destructiveAnnotations
+      ),
+      async ({ deviceId, jobId }) =>
+        textResult(
+          await hub.request(deviceId, "job.cancel", { jobId })
+        )
+    );
+
+    server.registerTool(
       "device_runtime_status",
       securedToolConfig(
         {

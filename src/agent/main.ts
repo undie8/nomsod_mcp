@@ -7,6 +7,7 @@ import { buildDescriptor, loadIdentity, saveIdentity } from "../shared/identity.
 import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/protocol.js";
 import { getNomsodVersion } from "../shared/version.js";
 import { AgentWorkerManager } from "./worker-manager.js";
+import { JobManager } from "./job-manager.js";
 import { hasConnectedPrimaryGateway, isFallbackGatewayUrl } from "./gateway-routing.js";
 import { resolveClusterId } from "../shared/single-cluster.js";
 
@@ -211,6 +212,8 @@ const workerManager = new AgentWorkerManager(
   Number(process.env.NOMSOD_AGENT_DRAIN_TIMEOUT_MS || 300_000)
 );
 
+const jobManager = new JobManager();
+
 async function handleRequest(request: AgentRequest): Promise<unknown> {
   if (request.method === "agent.runtime_status") {
     return workerManager.status();
@@ -224,6 +227,43 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
     return workerManager.rollback();
   }
 
+  if (request.method === "job.start") {
+    const params = (request.params && typeof request.params === "object"
+      ? request.params
+      : {}) as Record<string, unknown>;
+    return jobManager.start({
+      command: String(params.command || ""),
+      cwd: typeof params.cwd === "string" ? params.cwd : undefined,
+      shell: typeof params.shell === "string" ? params.shell : undefined,
+      timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined
+    });
+  }
+
+  if (request.method === "job.status") {
+    const params = (request.params && typeof request.params === "object"
+      ? request.params
+      : {}) as Record<string, unknown>;
+    const record = jobManager.getStatus(
+      String(params.jobId || ""),
+      typeof params.maxLines === "number" ? params.maxLines : undefined
+    );
+    if (!record) {
+      throw new Error(`Job not found: ${String(params.jobId || "")}`);
+    }
+    return record;
+  }
+
+  if (request.method === "job.cancel") {
+    const params = (request.params && typeof request.params === "object"
+      ? request.params
+      : {}) as Record<string, unknown>;
+    return jobManager.cancel(String(params.jobId || ""));
+  }
+
+  if (request.method === "job.list") {
+    return { jobs: jobManager.listJobs() };
+  }
+
   const params = request.params && typeof request.params === "object"
     ? request.params as Record<string, unknown>
     : {};
@@ -235,8 +275,10 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
 }
 
 async function startHealthServer(): Promise<void> {
-  healthServer = http.createServer((req, res) => {
-    if (req.method === "GET" && req.url === "/health") {
+  healthServer = http.createServer(async (req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    
+    if (req.method === "GET" && url.pathname === "/health") {
       res.writeHead(200, {
         "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store"
@@ -250,8 +292,44 @@ async function startHealthServer(): Promise<void> {
         gatewayConnected: connectedGateways.size > 0,
         connectedGateways: connectedGateways.size,
         configuredGateways: gatewayUrls.size,
-        worker: workerManager.status().active
+        worker: workerManager.status().active,
+        activeJobs: jobManager.listJobs().filter(j => j.status === "running").length
       }));
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/jobs") {
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store"
+      });
+      res.end(JSON.stringify({
+        ok: true,
+        jobs: jobManager.listJobs()
+      }));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/jobs/cancel") {
+      let body = "";
+      for await (const chunk of req) {
+        body += chunk;
+      }
+      try {
+        const parsed = JSON.parse(body);
+        const jobId = String(parsed.jobId || "");
+        const result = jobManager.cancel(jobId);
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store"
+        });
+        res.end(JSON.stringify(result));
+      } catch (err: any) {
+        res.writeHead(400, {
+          "content-type": "application/json; charset=utf-8"
+        });
+        res.end(JSON.stringify({ ok: false, error: err.message || "Invalid JSON" }));
+      }
       return;
     }
 
