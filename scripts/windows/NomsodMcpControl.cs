@@ -804,7 +804,6 @@ namespace NomsodMcpControl
                     Dock = DockStyle.Bottom,
                     Height = 48
                 };
-                form.Controls.Add(pnlBottom);
 
                 var listView = new ListView() {
                     Dock = DockStyle.Top,
@@ -818,7 +817,6 @@ namespace NomsodMcpControl
                 listView.Columns.Add("Command", 310);
                 listView.Columns.Add("PID", 65);
                 listView.Columns.Add("Job ID", 180);
-                form.Controls.Add(listView);
 
                 var txtOutput = new TextBox() {
                     Dock = DockStyle.Fill,
@@ -829,7 +827,25 @@ namespace NomsodMcpControl
                     BackColor = Color.FromArgb(30, 30, 30),
                     ForeColor = Color.FromArgb(212, 212, 212)
                 };
+                var pnlAction = new Panel() {
+                    Dock = DockStyle.Top,
+                    Height = 26,
+                    BackColor = Color.FromArgb(242, 244, 248),
+                    Padding = new Padding(8, 3, 8, 3)
+                };
+                var lblLastAction = new Label() {
+                    Dock = DockStyle.Fill,
+                    Text = "⚡ Last Activity: Ready",
+                    Font = new Font("Segoe UI", 9.0f, FontStyle.Regular),
+                    ForeColor = Color.FromArgb(70, 70, 70),
+                    AutoEllipsis = true
+                };
+                pnlAction.Controls.Add(lblLastAction);
+
                 form.Controls.Add(txtOutput);
+                form.Controls.Add(pnlAction);
+                form.Controls.Add(listView);
+                form.Controls.Add(pnlBottom);
 
                 var chkAuto = new CheckBox() {
                     Text = "Auto-refresh (1s)",
@@ -876,6 +892,11 @@ namespace NomsodMcpControl
                     {
                         string json = HttpGet("http://127.0.0.1:" + agentPort + "/jobs", 1500);
                         var items = ParseJobs(json);
+                        string actText = ParseLastAction(json);
+                        if (!String.IsNullOrEmpty(actText))
+                        {
+                            lblLastAction.Text = actText;
+                        }
 
                         string selectedJobId = null;
                         if (listView.SelectedItems.Count > 0)
@@ -1061,6 +1082,23 @@ namespace NomsodMcpControl
                 }
             }
             return list;
+        }
+
+        private static string ParseLastAction(string json)
+        {
+            if (String.IsNullOrWhiteSpace(json)) return "";
+            int idx = json.IndexOf("\"lastAction\"");
+            if (idx < 0) return "";
+            int open = json.IndexOf('{', idx);
+            if (open < 0) return "";
+            int close = json.IndexOf('}', open);
+            if (close <= open) return "";
+            string obj = json.Substring(open, close - open + 1);
+            string action = JsonString(obj, "action");
+            string detail = JsonString(obj, "detail");
+            long durationMs = JsonLong(obj, "durationMs", 0);
+            if (String.IsNullOrEmpty(action)) return "";
+            return "⚡ Last Activity: [" + action + "] " + detail + " (" + durationMs + "ms)";
         }
 
         private static List<string> ExtractJsonObjects(string jsonArrayContent)

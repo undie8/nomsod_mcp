@@ -184,6 +184,135 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
     );
 
     server.registerTool(
+      "search_files",
+      securedToolConfig(
+        {
+          title: "Search files",
+          description:
+            "Fast text or regex search across files in a directory on a connected computer. Automatically skips common build and cache directories.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            query: z.string().min(1),
+            path: z.string().optional(),
+            pattern: z.string().optional(),
+            isRegex: z.boolean().optional(),
+            caseSensitive: z.boolean().optional(),
+            maxResults: z.number().int().min(1).max(200).optional()
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, query, path, pattern, isRegex, caseSensitive, maxResults }) =>
+        textResult(
+          await hub.request(deviceId, "fs.search", {
+            query,
+            path,
+            pattern,
+            isRegex,
+            caseSensitive,
+            maxResults
+          })
+        )
+    );
+
+    server.registerTool(
+      "read_image_file",
+      securedToolConfig(
+        {
+          title: "Read image file",
+          description:
+            "Read an image file (.png, .jpg, .webp, .svg, .gif) from a connected computer and return standard MCP image content.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            path: z.string().min(1)
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, path }) => {
+        const res = (await hub.request(deviceId, "fs.read_image", { path })) as {
+          base64: string;
+          mimeType: string;
+          bytes: number;
+          width?: number;
+          height?: number;
+        };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  path,
+                  mimeType: res.mimeType,
+                  bytes: res.bytes,
+                  width: res.width,
+                  height: res.height
+                },
+                null,
+                2
+              )
+            },
+            {
+              type: "image" as const,
+              data: res.base64,
+              mimeType: res.mimeType
+            }
+          ]
+        };
+      }
+    );
+
+    server.registerTool(
+      "capture_screenshot",
+      securedToolConfig(
+        {
+          title: "Capture screenshot",
+          description:
+            "Capture a screenshot of the connected computer's screen and return standard MCP image content for visual UI review.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            screenMode: z.enum(["primary", "virtual"]).optional()
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, screenMode }) => {
+        const res = (await hub.request(deviceId, "desktop.screenshot", { screenMode })) as {
+          base64: string;
+          mimeType: string;
+          bytes: number;
+          width?: number;
+          height?: number;
+          capturedAt: number;
+        };
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  screenMode: screenMode || "primary",
+                  bytes: res.bytes,
+                  width: res.width,
+                  height: res.height,
+                  capturedAt: res.capturedAt
+                },
+                null,
+                2
+              )
+            },
+            {
+              type: "image" as const,
+              data: res.base64,
+              mimeType: res.mimeType
+            }
+          ]
+        };
+      }
+    );
+
+    server.registerTool(
       "patch_text_file",
       securedToolConfig(
         {

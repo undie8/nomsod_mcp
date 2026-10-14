@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { readUtf8TextFile, writeUtf8TextFile } from "../shared/text-codec.js";
+import { searchFiles } from "./search-helper.js";
+import { captureScreenshot, readImageFile } from "./visual-helper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -227,6 +229,34 @@ export async function executeAction(method: string, rawParams: unknown): Promise
           encoding: "utf-8"
         };
       }
+    }
+
+    case "fs.search": {
+      const query = requiredString(params, "query");
+      const targetPath = typeof params.path === "string" && params.path ? params.path : undefined;
+      const pattern = typeof params.pattern === "string" && params.pattern ? params.pattern : undefined;
+      const maxResults = typeof params.maxResults === "number" ? params.maxResults : undefined;
+      const isRegex = typeof params.isRegex === "boolean" ? params.isRegex : undefined;
+      const caseSensitive = typeof params.caseSensitive === "boolean" ? params.caseSensitive : undefined;
+
+      return searchFiles({
+        query,
+        path: targetPath,
+        pattern,
+        maxResults,
+        isRegex,
+        caseSensitive
+      });
+    }
+
+    case "fs.read_image": {
+      const target = requiredString(params, "path");
+      return readImageFile(target);
+    }
+
+    case "desktop.screenshot": {
+      const screenMode = params.screenMode === "virtual" ? "virtual" : "primary";
+      return captureScreenshot({ screenMode });
     }
 
     default:

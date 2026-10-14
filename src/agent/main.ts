@@ -261,9 +261,22 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
   }
 
   if (request.method === "job.list") {
-    return { jobs: jobManager.listJobs() };
+    return { jobs: jobManager.listJobs(), lastAction: jobManager.getLastAction() };
   }
 
+  if (request.method === "shell.exec") {
+    const params = (request.params && typeof request.params === "object"
+      ? request.params
+      : {}) as Record<string, unknown>;
+    return jobManager.executeSync({
+      command: String(params.command || ""),
+      cwd: typeof params.cwd === "string" ? params.cwd : undefined,
+      shell: typeof params.shell === "string" ? params.shell : undefined,
+      timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined
+    });
+  }
+
+  const start = Date.now();
   const params = request.params && typeof request.params === "object"
     ? request.params as Record<string, unknown>
     : {};
@@ -271,7 +284,28 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
     ? params.timeoutMs
     : 120_000;
 
-  return workerManager.execute(request.method, request.params, timeoutMs);
+  try {
+    const result = await workerManager.execute(request.method, request.params, timeoutMs);
+    const detail = typeof params.path === "string"
+      ? params.path
+      : typeof params.command === "string"
+        ? params.command
+        : typeof params.query === "string"
+          ? params.query
+          : "";
+    jobManager.recordAction(request.method, detail, Date.now() - start, "completed");
+    return result;
+  } catch (error) {
+    const detail = typeof params.path === "string"
+      ? params.path
+      : typeof params.command === "string"
+        ? params.command
+        : typeof params.query === "string"
+          ? params.query
+          : "";
+    jobManager.recordAction(request.method, detail, Date.now() - start, "failed");
+    throw error;
+  }
 }
 
 async function startHealthServer(): Promise<void> {
@@ -293,7 +327,8 @@ async function startHealthServer(): Promise<void> {
         connectedGateways: connectedGateways.size,
         configuredGateways: gatewayUrls.size,
         worker: workerManager.status().active,
-        activeJobs: jobManager.listJobs().filter(j => j.status === "running").length
+        activeJobs: jobManager.listJobs().filter(j => j.status === "running").length,
+        lastAction: jobManager.getLastAction()
       }));
       return;
     }
@@ -305,7 +340,8 @@ async function startHealthServer(): Promise<void> {
       });
       res.end(JSON.stringify({
         ok: true,
-        jobs: jobManager.listJobs()
+        jobs: jobManager.listJobs(),
+        lastAction: jobManager.getLastAction()
       }));
       return;
     }

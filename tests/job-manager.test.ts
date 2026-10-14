@@ -52,4 +52,33 @@ describe("JobManager", () => {
     const status = manager.getStatus(result.jobId);
     expect(status?.status).toBe("cancelled");
   });
+
+  it("should execute synchronous command and return output", async () => {
+    const manager = new JobManager();
+    const isWin = process.platform === "win32";
+    const command = isWin ? "echo sync_test_output" : "echo 'sync_test_output'";
+
+    const result = await manager.executeSync({ command });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("sync_test_output");
+    expect(result.encoding).toBe("utf-8");
+
+    // Should also be in job list as completed
+    const jobs = manager.listJobs();
+    expect(jobs.length).toBeGreaterThan(0);
+    expect(jobs[0].status).toBe("completed");
+  });
+
+  it("should record and retrieve lightweight action status", () => {
+    const manager = new JobManager();
+    expect(manager.getLastAction()).toBeUndefined();
+
+    manager.recordAction("fs.patch", "SubjectCriteriaEntryNotice.tsx", 25, "completed");
+    const last = manager.getLastAction();
+    expect(last).toBeDefined();
+    expect(last?.action).toBe("fs.patch");
+    expect(last?.detail).toBe("SubjectCriteriaEntryNotice.tsx");
+    expect(last?.durationMs).toBe(25);
+    expect(last?.status).toBe("completed");
+  });
 });

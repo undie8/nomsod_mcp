@@ -22,10 +22,20 @@ function encodePowerShellCommand(command: string): string {
   return Buffer.from(`${prelude} ${command}`, "utf16le").toString("base64");
 }
 
+export interface ActionRecord {
+  action: string;
+  detail: string;
+  durationMs: number;
+  timestamp: number;
+  status: "completed" | "failed";
+}
+
 interface InternalJob extends JobRecord {
   process?: ChildProcess;
   stdoutLines: string[];
   stderrLines: string[];
+  fullStdoutChunks: Buffer[];
+  fullStderrChunks: Buffer[];
   timeoutTimer?: NodeJS.Timeout;
 }
 
@@ -88,7 +98,9 @@ export class JobManager {
       totalStderrLines: 0,
       process: child,
       stdoutLines: [],
-      stderrLines: []
+      stderrLines: [],
+      fullStdoutChunks: [],
+      fullStderrChunks: []
     };
 
     if (params.timeoutMs && params.timeoutMs > 0) {
@@ -107,10 +119,12 @@ export class JobManager {
     }
 
     child.stdout?.on("data", (chunk: Buffer) => {
+      internalJob.fullStdoutChunks.push(chunk);
       this.appendOutput(internalJob, chunk, false);
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
+      internalJob.fullStderrChunks.push(chunk);
       this.appendOutput(internalJob, chunk, true);
     });
 
@@ -145,6 +159,67 @@ export class JobManager {
       pid: child.pid,
       startedAt
     };
+  }
+
+  public async executeSync(params: StartJobParams): Promise<{
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    shell: string;
+    encoding: string;
+  }> {
+    const started = await this.start(params);
+    const job = this.jobs.get(started.jobId);
+    if (!job || !job.process) {
+      throw new Error(`Failed to start command: ${params.command}`);
+    }
+
+    const child = job.process;
+    return new Promise((resolve) => {
+      child.on("close", (code) => {
+        const fullStdout = Buffer.concat(job.fullStdoutChunks).toString("utf8");
+        const fullStderr = Buffer.concat(job.fullStderrChunks).toString("utf8");
+        job.fullStdoutChunks = [];
+        job.fullStderrChunks = [];
+        resolve({
+          exitCode: typeof code === "number" ? code : job.status === "completed" ? 0 : 1,
+          stdout: fullStdout,
+          stderr: fullStderr,
+          shell: job.shell,
+          encoding: "utf-8"
+        });
+      });
+
+      child.on("error", (err) => {
+        const fullStdout = Buffer.concat(job.fullStdoutChunks).toString("utf8");
+        const fullStderr = Buffer.concat(job.fullStderrChunks).toString("utf8");
+        job.fullStdoutChunks = [];
+        job.fullStderrChunks = [];
+        resolve({
+          exitCode: 1,
+          stdout: fullStdout,
+          stderr: fullStderr || err.message,
+          shell: job.shell,
+          encoding: "utf-8"
+        });
+      });
+    });
+  }
+
+  private lastAction?: ActionRecord;
+
+  public recordAction(action: string, detail: string, durationMs: number, status: "completed" | "failed" = "completed"): void {
+    this.lastAction = {
+      action,
+      detail,
+      durationMs,
+      timestamp: Date.now(),
+      status
+    };
+  }
+
+  public getLastAction(): ActionRecord | undefined {
+    return this.lastAction;
   }
 
   public getStatus(jobId: string, maxLines?: number): JobRecord | undefined {

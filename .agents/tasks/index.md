@@ -11,6 +11,8 @@
 ## ✅ Completed
 | ID | Title | Completed Date |
 |---|---|---|
+| [TASK-007](completed/TASK-007-search-and-visual-tools.md) | Implement Search and Visual Image / Screenshot Tools for ChatGPT | 2026-10-15 |
+| [TASK-006](completed/TASK-006-track-sync-shell-and-action-status.md) | Track Synchronous Shell Commands in JobManager and Add Lightweight Action Status | 2026-10-15 |
 | [TASK-005](completed/TASK-005-tray-jobs-live-monitor.md) | Windows Tray Icon Live Jobs Monitor & Local Control Endpoint | 2026-10-15 |
 | [TASK-004](completed/TASK-004-async-jobs-and-keepalive.md) | Async Command Execution, SSE Keep-Alive, and Local Jobs Observability | 2026-10-15 |
 | [TASK-003](completed/TASK-003-mcp-tool-auto-approve-annotations.md) | Configure MCP Tool Annotations for Seamless Auto-Approval in Gemini Enterprise | 2026-10-14 |
