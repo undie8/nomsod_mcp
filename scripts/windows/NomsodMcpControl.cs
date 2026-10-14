@@ -6,6 +6,7 @@ using System.IO;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using System.Windows.Forms;
 
 namespace NomsodMcpControl
@@ -59,8 +60,8 @@ namespace NomsodMcpControl
             infoItem.Click += delegate { ShowInfo(); };
             menu.Items.Add(infoItem);
 
-            var revealKeysItem = new ToolStripMenuItem("Reveal keys...");
-            revealKeysItem.Click += delegate { RevealKeys(); };
+            var revealKeysItem = new ToolStripMenuItem("Setup info & keys (Protected)...");
+            revealKeysItem.Click += delegate { ShowProtectedSetupInfo(); };
             menu.Items.Add(revealKeysItem);
 
             var enrollMenu = new ToolStripMenuItem("Add new computer");
@@ -186,37 +187,309 @@ namespace NomsodMcpControl
             MessageBox.Show(msg, "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        private void RevealKeys()
+        private void ShowProtectedSetupInfo()
         {
-            if (MessageBox.Show(
-                    "Keys are sensitive credentials. Show them on screen?",
-                    "Nomsod MCP",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning) != DialogResult.Yes)
-                return;
+            if (!VerifyOrSetPin()) return;
+            ShowSetupInfoForm();
+        }
 
+        private static string Sha256(string value)
+        {
+            using (var sha = SHA256.Create())
+            {
+                byte[] bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? ""));
+                var sb = new StringBuilder();
+                foreach (byte b in bytes) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        private bool VerifyOrSetPin()
+        {
+            string pinPath = Path.Combine(root, "data", "control.pin");
+            bool hasPin = File.Exists(pinPath) && !String.IsNullOrWhiteSpace(SafeReadAllText(pinPath));
+
+            using (var form = new Form())
+            {
+                form.Text = hasPin ? "Security PIN Required" : "Set Security PIN";
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                form.StartPosition = FormStartPosition.CenterScreen;
+                form.ClientSize = new Size(360, 160);
+                form.Icon = appIcon;
+                form.Font = new Font("Segoe UI", 9.5f);
+
+                var lbl = new Label() {
+                    Left = 20, Top = 16, Width = 320, Height = 42,
+                    Text = hasPin
+                        ? "Enter your security PIN/password to view connection setup values and sensitive keys:"
+                        : "Create a security PIN/password to protect your connection setup values and keys:"
+                };
+                form.Controls.Add(lbl);
+
+                var txt = new TextBox() {
+                    Left = 20, Top = 64, Width = 320,
+                    UseSystemPasswordChar = true
+                };
+                form.Controls.Add(txt);
+
+                var btnOk = new Button() {
+                    Text = hasPin ? "Unlock" : "Save PIN",
+                    Left = 160, Top = 108, Width = 85, Height = 30,
+                    DialogResult = DialogResult.OK
+                };
+                var btnCancel = new Button() {
+                    Text = "Cancel",
+                    Left = 255, Top = 108, Width = 85, Height = 30,
+                    DialogResult = DialogResult.Cancel
+                };
+                form.Controls.Add(btnOk);
+                form.Controls.Add(btnCancel);
+                form.AcceptButton = btnOk;
+                form.CancelButton = btnCancel;
+
+                if (form.ShowDialog() != DialogResult.OK) return false;
+
+                string entered = txt.Text.Trim();
+                if (String.IsNullOrEmpty(entered))
+                {
+                    MessageBox.Show("PIN/password cannot be empty.", "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
+                }
+
+                string enteredHash = Sha256(entered);
+                if (hasPin)
+                {
+                    string storedHash = SafeReadAllText(pinPath).Trim();
+                    if (String.Equals(enteredHash, storedHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                    MessageBox.Show("Incorrect security PIN/password.", "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return false;
+                }
+                else
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(pinPath));
+                        File.WriteAllText(pinPath, enteredHash + Environment.NewLine, Encoding.UTF8);
+                        MessageBox.Show("Security PIN saved successfully.", "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("Could not save PIN: " + ex.Message, "Nomsod MCP", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return false;
+                    }
+                }
+            }
+        }
+
+        private void ResetPin()
+        {
+            string pinPath = Path.Combine(root, "data", "control.pin");
+            if (File.Exists(pinPath))
+            {
+                if (!VerifyOrSetPin()) return;
+                try { File.Delete(pinPath); } catch { }
+            }
+            VerifyOrSetPin();
+        }
+
+        private string GetGeminiClientSecret()
+        {
+            string envSecret = GetEnv("NOMSOD_GEMINI_CLIENT_SECRET", "");
+            if (!String.IsNullOrWhiteSpace(envSecret)) return envSecret;
+
+            string secretFile = Path.Combine(root, "data", "gemini-client.secret");
+            string fileSecret = SafeReadAllText(secretFile).Trim();
+            if (!String.IsNullOrWhiteSpace(fileSecret)) return fileSecret;
+
+            return "(not generated yet)";
+        }
+
+        private string GetGeminiClientId()
+        {
+            return GetEnv("NOMSOD_GEMINI_CLIENT_ID", "gemini-enterprise");
+        }
+
+        private string GetOwnerKey()
+        {
+            string owner = GetEnv("NOMSOD_OWNER_KEY", "");
+            if (!String.IsNullOrWhiteSpace(owner)) return owner;
+            return GetEnv("NOMSOD_PAIRING_TOKEN", "(not stored on this computer)");
+        }
+
+        private void ShowSetupInfoForm()
+        {
             env = ReadEnv(Path.Combine(root, ".env"));
             string identityPath = GetIdentityPath();
             string identityJson = File.Exists(identityPath) ? SafeReadAllText(identityPath) : "";
 
-            string owner = GetEnv("NOMSOD_OWNER_KEY", "(not stored on this computer)");
-            string pairing = GetEnv("NOMSOD_PAIRING_TOKEN", "(not stored on this computer)");
-            string deviceToken = JsonString(identityJson, "deviceToken");
-            if (String.IsNullOrWhiteSpace(deviceToken)) deviceToken = "(not paired)";
+            string mcpUrl = GetPublicMcpUrl();
+            string authUrl = GetPublicBaseUrl() + "/oauth/authorize";
+            string tokenUrl = GetPublicBaseUrl() + "/oauth/token";
+            string clientId = GetGeminiClientId();
+            string clientSecret = GetGeminiClientSecret();
+            string scope = "mcp";
+            string ownerKey = GetOwnerKey();
+            string pairingToken = GetEnv("NOMSOD_PAIRING_TOKEN", "(not stored on this computer)");
+            string deviceId = ValueOr(JsonString(identityJson, "deviceId"), "(not paired)");
 
-            string msg =
-                "Owner key:\r\n" + owner + "\r\n\r\n" +
-                "Pairing key:\r\n" + pairing + "\r\n\r\n" +
-                "Device token:\r\n" + deviceToken;
+            using (var form = new Form())
+            {
+                form.Text = "Nomsod MCP - Setup Information & Keys";
+                form.FormBorderStyle = FormBorderStyle.FixedDialog;
+                form.MaximizeBox = false;
+                form.MinimizeBox = false;
+                form.StartPosition = FormStartPosition.CenterScreen;
+                form.ClientSize = new Size(650, 520);
+                form.Icon = appIcon;
+                form.Font = new Font("Segoe UI", 9.0f);
 
-            var result = MessageBox.Show(
-                msg + "\r\n\r\nCopy all keys to clipboard?",
-                "Nomsod MCP - Sensitive Keys",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
+                int y = 12;
 
-            if (result == DialogResult.Yes)
-                Clipboard.SetText(msg);
+                // Group 1: Gemini Enterprise Setup
+                var grpGemini = new GroupBox() {
+                    Text = " Gemini Enterprise MCP Configuration ",
+                    Left = 16, Top = y, Width = 618, Height = 230,
+                    Font = new Font("Segoe UI", 9.0f, FontStyle.Bold)
+                };
+                form.Controls.Add(grpGemini);
+
+                int gy = 24;
+                AddSetupField(grpGemini, "URL ของเซิร์ฟเวอร์:", mcpUrl, ref gy);
+                AddSetupField(grpGemini, "URL การให้สิทธิ์:", authUrl, ref gy);
+                AddSetupField(grpGemini, "URL โทเค็น:", tokenUrl, ref gy);
+                AddSetupField(grpGemini, "รหัสไคลเอนต์:", clientId, ref gy);
+                AddSetupField(grpGemini, "รหัสลับไคลเอนต์:", clientSecret, ref gy);
+                AddSetupField(grpGemini, "ขอบเขต:", scope, ref gy);
+
+                y += 240;
+
+                // Group 2: Master Credentials
+                var grpMaster = new GroupBox() {
+                    Text = " Master Security Credentials ",
+                    Left = 16, Top = y, Width = 618, Height = 160,
+                    Font = new Font("Segoe UI", 9.0f, FontStyle.Bold)
+                };
+                form.Controls.Add(grpMaster);
+
+                int my = 24;
+                AddSetupField(grpMaster, "Owner Key:", ownerKey, ref my);
+                AddSetupField(grpMaster, "Pairing Token:", pairingToken, ref my);
+                AddSetupField(grpMaster, "Device ID:", deviceId, ref my);
+                AddSetupField(grpMaster, "Gateway WS:", GetEnv("NOMSOD_GATEWAY_WS", "wss://mcp.nomsod.net/agent"), ref my);
+
+                y += 175;
+
+                // Buttons
+                var btnCopyGemini = new Button() {
+                    Text = "Copy Gemini Config",
+                    Left = 16, Top = y, Width = 150, Height = 34,
+                    Font = new Font("Segoe UI", 9.0f)
+                };
+                btnCopyGemini.Click += delegate {
+                    string geminiAll =
+                        "URL ของเซิร์ฟเวอร์: " + mcpUrl + "\r\n" +
+                        "URL การให้สิทธิ์: " + authUrl + "\r\n" +
+                        "URL โทเค็น: " + tokenUrl + "\r\n" +
+                        "รหัสไคลเอนต์: " + clientId + "\r\n" +
+                        "รหัสลับไคลเอนต์: " + clientSecret + "\r\n" +
+                        "ขอบเขต: " + scope + "\r\n" +
+                        "Owner key: " + ownerKey;
+                    Clipboard.SetText(geminiAll);
+                    btnCopyGemini.Text = "Copied!";
+                    var t = new Timer() { Interval = 1500 };
+                    t.Tick += delegate { btnCopyGemini.Text = "Copy Gemini Config"; t.Stop(); t.Dispose(); };
+                    t.Start();
+                };
+                form.Controls.Add(btnCopyGemini);
+
+                var btnCopyAll = new Button() {
+                    Text = "Copy Everything",
+                    Left = 174, Top = y, Width = 130, Height = 34,
+                    Font = new Font("Segoe UI", 9.0f)
+                };
+                btnCopyAll.Click += delegate {
+                    string all =
+                        "=== Gemini Enterprise Setup ===\r\n" +
+                        "MCP URL: " + mcpUrl + "\r\n" +
+                        "Auth URL: " + authUrl + "\r\n" +
+                        "Token URL: " + tokenUrl + "\r\n" +
+                        "Client ID: " + clientId + "\r\n" +
+                        "Client Secret: " + clientSecret + "\r\n" +
+                        "Scope: " + scope + "\r\n\r\n" +
+                        "=== Master Credentials ===\r\n" +
+                        "Owner Key: " + ownerKey + "\r\n" +
+                        "Pairing Token: " + pairingToken + "\r\n" +
+                        "Device ID: " + deviceId;
+                    Clipboard.SetText(all);
+                    btnCopyAll.Text = "Copied!";
+                    var t = new Timer() { Interval = 1500 };
+                    t.Tick += delegate { btnCopyAll.Text = "Copy Everything"; t.Stop(); t.Dispose(); };
+                    t.Start();
+                };
+                form.Controls.Add(btnCopyAll);
+
+                var btnResetPin = new Button() {
+                    Text = "Change PIN...",
+                    Left = 312, Top = y, Width = 110, Height = 34,
+                    Font = new Font("Segoe UI", 9.0f)
+                };
+                btnResetPin.Click += delegate {
+                    ResetPin();
+                };
+                form.Controls.Add(btnResetPin);
+
+                var btnClose = new Button() {
+                    Text = "Close",
+                    Left = 544, Top = y, Width = 90, Height = 34,
+                    DialogResult = DialogResult.OK,
+                    Font = new Font("Segoe UI", 9.0f)
+                };
+                form.Controls.Add(btnClose);
+                form.CancelButton = btnClose;
+
+                form.ShowDialog();
+            }
+        }
+
+        private static void AddSetupField(GroupBox parent, string label, string value, ref int y)
+        {
+            var lbl = new Label() {
+                Text = label,
+                Left = 16, Top = y + 2, Width = 160, Height = 20,
+                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular)
+            };
+            parent.Controls.Add(lbl);
+
+            var txt = new TextBox() {
+                Text = value,
+                Left = 180, Top = y, Width = 360, Height = 22,
+                ReadOnly = true,
+                BackColor = Color.White,
+                Font = new Font("Consolas", 8.5f)
+            };
+            parent.Controls.Add(txt);
+
+            var btn = new Button() {
+                Text = "Copy",
+                Left = 546, Top = y - 1, Width = 56, Height = 24,
+                Font = new Font("Segoe UI", 8.0f)
+            };
+            btn.Click += delegate {
+                Clipboard.SetText(value ?? "");
+                btn.Text = "Copied";
+                var t = new Timer() { Interval = 1200 };
+                t.Tick += delegate { btn.Text = "Copy"; t.Stop(); t.Dispose(); };
+                t.Start();
+            };
+            parent.Controls.Add(btn);
+
+            y += 28;
         }
 
         private string GetVersion()

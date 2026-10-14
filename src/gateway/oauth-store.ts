@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, promises as fs, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { resolveClusterKey, signClusterToken, verifyClusterToken } from "../shared/cluster-token.js";
 
@@ -7,13 +7,14 @@ export interface OAuthClientRecord {
   clientId: string;
   redirectUris: string[];
   clientName?: string;
+  clientSecret?: string;
   createdAt: string;
 }
 
 export interface AuthCodeRecord {
   clientId: string;
   redirectUri: string;
-  codeChallenge: string;
+  codeChallenge?: string;
   scope: string;
   resource: string;
   expiresAt: number;
@@ -35,6 +36,7 @@ interface OAuthStoreFile {
 interface ClusterClientPayload {
   redirectUris: string[];
   clientName?: string;
+  clientSecret?: string;
   createdAt: string;
 }
 
@@ -45,16 +47,44 @@ interface ClusterTokenPayload {
   expiresAt: number;
 }
 
+function loadOrCreateGeminiClientSecret(rootDir: string = process.cwd()): string {
+  const configured = (process.env.NOMSOD_GEMINI_CLIENT_SECRET || "").trim();
+  if (configured) return configured;
+
+  const secretPath =
+    process.env.NOMSOD_GEMINI_CLIENT_SECRET_PATH ||
+    path.resolve(rootDir, "data", "gemini-client.secret");
+
+  try {
+    if (existsSync(secretPath)) {
+      const existing = readFileSync(secretPath, "utf8").trim();
+      if (existing) return existing;
+    }
+  } catch {}
+
+  const generated = "ngs_" + randomBytes(24).toString("base64url");
+  mkdirSync(path.dirname(secretPath), { recursive: true });
+  writeFileSync(secretPath, generated + "\n", { encoding: "utf8", mode: 0o600 });
+  try { chmodSync(secretPath, 0o600); } catch {}
+  return generated;
+}
+
 export class OAuthStore {
   private data: OAuthStoreFile = { clients: {}, accessTokens: {}, refreshTokens: {} };
   private loaded = false;
   private writeChain: Promise<void> = Promise.resolve();
   private readonly authCodes = new Map<string, AuthCodeRecord>();
+  private readonly geminiClientId: string;
+  private readonly geminiClientSecret: string;
 
   constructor(
     private readonly file = process.env.NOMSOD_OAUTH_STORE_PATH || path.resolve("data", "oauth.json"),
-    private readonly clusterKey = resolveClusterKey()
-  ) {}
+    private readonly clusterKey = resolveClusterKey(),
+    private readonly rootDir = process.cwd()
+  ) {
+    this.geminiClientId = (process.env.NOMSOD_GEMINI_CLIENT_ID || "gemini-enterprise").trim();
+    this.geminiClientSecret = loadOrCreateGeminiClientSecret(this.rootDir);
+  }
 
   private hash(token: string): string {
     return createHash("sha256").update(token).digest("hex");
@@ -103,7 +133,11 @@ export class OAuthStore {
     return this.writeChain;
   }
 
-  async registerClient(input: { redirectUris: string[]; clientName?: string }): Promise<OAuthClientRecord> {
+  async registerClient(input: {
+    redirectUris: string[];
+    clientName?: string;
+    clientSecret?: string;
+  }): Promise<OAuthClientRecord> {
     await this.load();
     const createdAt = new Date().toISOString();
 
@@ -111,6 +145,7 @@ export class OAuthStore {
       const payload: ClusterClientPayload = {
         redirectUris: [...new Set(input.redirectUris)],
         clientName: input.clientName,
+        clientSecret: input.clientSecret,
         createdAt
       };
       const clientId = signClusterToken("nmc2", payload, this.clusterKey);
@@ -122,6 +157,7 @@ export class OAuthStore {
       clientId,
       redirectUris: [...new Set(input.redirectUris)],
       clientName: input.clientName,
+      clientSecret: input.clientSecret,
       createdAt
     };
     this.data.clients[clientId] = record;
@@ -155,8 +191,19 @@ export class OAuthStore {
     await this.persist();
     return record;
   }
+
   async getClient(clientId: string): Promise<OAuthClientRecord | undefined> {
     await this.load();
+
+    if (clientId && clientId === this.geminiClientId) {
+      return {
+        clientId: this.geminiClientId,
+        clientSecret: this.geminiClientSecret,
+        clientName: "Gemini Enterprise",
+        redirectUris: [],
+        createdAt: "2026-10-14T00:00:00.000Z"
+      };
+    }
 
     if (this.clusterKey && clientId.startsWith("nmc2.")) {
       const payload = verifyClusterToken<ClusterClientPayload>(clientId, "nmc2", this.clusterKey);
@@ -165,11 +212,19 @@ export class OAuthStore {
         clientId,
         redirectUris: payload.redirectUris,
         clientName: payload.clientName,
+        clientSecret: payload.clientSecret,
         createdAt: payload.createdAt
       };
     }
 
     return this.data.clients[clientId];
+  }
+
+  getGeminiCredentials(): { clientId: string; clientSecret: string } {
+    return {
+      clientId: this.geminiClientId,
+      clientSecret: this.geminiClientSecret
+    };
   }
 
   async issueAuthorizationCode(record: AuthCodeRecord): Promise<string> {

@@ -62,6 +62,35 @@ function trustedLegacyChatGptClient(clientId: string, redirectUri: string): bool
     return false;
   }
 }
+
+function isTrustedGoogleRedirect(redirectUri: string): boolean {
+  try {
+    const url = new URL(redirectUri);
+    if (url.protocol !== "https:") return false;
+
+    const host = url.hostname.toLowerCase();
+    return (
+      host === "google.com" ||
+      host.endsWith(".google.com") ||
+      host === "googleusercontent.com" ||
+      host.endsWith(".googleusercontent.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isClientRedirectAllowed(
+  client: { redirectUris: string[] } | undefined,
+  clientId: string,
+  redirectUri: string
+): boolean {
+  if (!client && trustedLegacyChatGptClient(clientId, redirectUri)) return true;
+  if (!client) return false;
+  if (client.redirectUris.includes(redirectUri)) return true;
+  if (isTrustedGoogleRedirect(redirectUri)) return true;
+  return false;
+}
 export class OAuthService {
 
 
@@ -73,6 +102,10 @@ export class OAuthService {
 
   async initialize(): Promise<void> {
     await this.store.load();
+  }
+
+  getGeminiCredentials(): { clientId: string; clientSecret: string } {
+    return this.store.getGeminiCredentials();
   }
 
   challenge(res: ServerResponse): void {
@@ -116,7 +149,7 @@ export class OAuthService {
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         scopes_supported: ["mcp", "offline_access"],
-        token_endpoint_auth_methods_supported: ["none"],
+        token_endpoint_auth_methods_supported: ["none", "client_secret_post", "client_secret_basic"],
         code_challenge_methods_supported: ["S256"],
         authorization_response_iss_parameter_supported: true
       });
@@ -162,13 +195,18 @@ export class OAuthService {
       const resource = url.searchParams.get("resource") || `${this.publicBase}/mcp`;
 
       const client = await this.store.getClient(clientId);
-      const legacyClientAllowed = !client && trustedLegacyChatGptClient(clientId, redirectUri);
-      if ((!client && !legacyClientAllowed) || (client && !client.redirectUris.includes(redirectUri))) {
+      if (!isClientRedirectAllowed(client, clientId, redirectUri)) {
         json(res, 400, { error: "invalid_request", error_description: "Unknown client or redirect URI" });
         return true;
       }
-      if (!codeChallenge || codeChallengeMethod !== "S256") {
-        json(res, 400, { error: "invalid_request", error_description: "PKCE S256 is required" });
+      const isConfidential = Boolean(client && client.clientSecret);
+      if (codeChallenge) {
+        if (codeChallengeMethod !== "S256") {
+          json(res, 400, { error: "invalid_request", error_description: "PKCE S256 is required" });
+          return true;
+        }
+      } else if (!isConfidential) {
+        json(res, 400, { error: "invalid_request", error_description: "PKCE S256 is required for public clients" });
         return true;
       }
       if (resource !== `${this.publicBase}/mcp`) {
@@ -180,6 +218,7 @@ export class OAuthService {
         return true;
       }
 
+      const clientDisplayName = client?.clientName || "MCP";
       const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -196,7 +235,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
 </head>
 <body><main>
 <h1>Authorize Nomsod MCP</h1>
-<p>Allow this ChatGPT MCP client to access computers connected to your Nomsod Gateway.</p>
+<p>Allow this ${htmlEscape(clientDisplayName)} client to access computers connected to your Nomsod Gateway.</p>
 <form method="post" action="/oauth/authorize">
 <input type="hidden" name="client_id" value="${htmlEscape(clientId)}">
 <input type="hidden" name="redirect_uri" value="${htmlEscape(redirectUri)}">
@@ -206,7 +245,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
 <input type="hidden" name="resource" value="${htmlEscape(resource)}">
 <label>Owner key</label>
 <input type="password" name="owner_key" autocomplete="current-password" required autofocus>
-<button type="submit">Authorize ChatGPT</button>
+<button type="submit">Authorize ${htmlEscape(clientDisplayName)}</button>
 </form></main></body></html>`;
 
       res.writeHead(200, {
@@ -237,7 +276,12 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       if (!client && trustedLegacyChatGptClient(clientId, redirectUri)) {
         client = await this.store.adoptLegacyClient(clientId, redirectUri);
       }
-      if (!client || !client.redirectUris.includes(redirectUri) || !codeChallenge) {
+      const isConfidential = Boolean(client && client.clientSecret);
+      if (!client || !isClientRedirectAllowed(client, clientId, redirectUri)) {
+        json(res, 400, { error: "invalid_request" });
+        return true;
+      }
+      if (!codeChallenge && !isConfidential) {
         json(res, 400, { error: "invalid_request" });
         return true;
       }
@@ -249,7 +293,7 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       const code = await this.store.issueAuthorizationCode({
         clientId,
         redirectUri,
-        codeChallenge,
+        codeChallenge: codeChallenge || undefined,
         scope,
         resource,
         expiresAt: Date.now() + 5 * 60_000
@@ -280,7 +324,29 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       }
 
       const grantType = params.get("grant_type") || "";
-      const clientId = params.get("client_id") || "";
+      let clientId = params.get("client_id") || "";
+      let clientSecret = params.get("client_secret") || "";
+
+      const authHeader = req.headers.authorization || "";
+      if (authHeader.startsWith("Basic ") || authHeader.startsWith("basic ")) {
+        try {
+          const credentials = Buffer.from(authHeader.slice(6).trim(), "base64").toString("utf8");
+          const colonIndex = credentials.indexOf(":");
+          if (colonIndex !== -1) {
+            clientId = decodeURIComponent(credentials.slice(0, colonIndex));
+            clientSecret = decodeURIComponent(credentials.slice(colonIndex + 1));
+          }
+        } catch {}
+      }
+
+      const client = await this.store.getClient(clientId);
+      if (client?.clientSecret) {
+        if (!clientSecret || !safeSecretEqual(clientSecret, client.clientSecret)) {
+          json(res, 401, { error: "invalid_client", error_description: "Invalid client credentials" });
+          return true;
+        }
+      }
+
       const resource = params.get("resource") || `${this.publicBase}/mcp`;
 
       if (resource !== `${this.publicBase}/mcp`) {
@@ -325,16 +391,24 @@ button{width:100%;margin-top:18px;padding:12px;border:0;border-radius:8px;backgr
       if (
         record.clientId !== clientId ||
         record.redirectUri !== redirectUri ||
-        record.resource !== resource ||
-        !verifier
+        record.resource !== resource
       ) {
         json(res, 400, { error: "invalid_grant" });
         return true;
       }
 
-      const expected = createHash("sha256").update(verifier).digest("base64url");
-      if (expected !== record.codeChallenge) {
-        json(res, 400, { error: "invalid_grant", error_description: "PKCE verification failed" });
+      if (record.codeChallenge) {
+        if (!verifier) {
+          json(res, 400, { error: "invalid_grant", error_description: "code_verifier required" });
+          return true;
+        }
+        const expected = createHash("sha256").update(verifier).digest("base64url");
+        if (expected !== record.codeChallenge) {
+          json(res, 400, { error: "invalid_grant", error_description: "PKCE verification failed" });
+          return true;
+        }
+      } else if (!client?.clientSecret) {
+        json(res, 400, { error: "invalid_grant" });
         return true;
       }
 
