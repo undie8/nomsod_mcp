@@ -196,6 +196,8 @@ export async function executeAction(method: string, rawParams: unknown): Promise
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-EncodedCommand",
             encodePowerShellCommand(command)
           ];

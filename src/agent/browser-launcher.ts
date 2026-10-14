@@ -1,4 +1,4 @@
-import { spawn, exec, ChildProcess } from "node:child_process";
+import { spawn, execFile, ChildProcess } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface BrowserLauncherOptions {
   browser?: "chrome" | "edge" | "chromium" | "any";
@@ -131,8 +131,8 @@ export async function locateBrowser(options: BrowserLauncherOptions = {}): Promi
 
   for (const bin of binaryNames) {
     try {
-      const cmd = os.platform() === "win32" ? `where ${bin}` : `which ${bin}`;
-      const { stdout } = await execAsync(cmd);
+      const cmd = os.platform() === "win32" ? "where" : "which";
+      const { stdout } = await execFileAsync(cmd, [bin], { windowsHide: true });
       const resolved = stdout.trim().split(/\r?\n/)[0];
       if (resolved) {
         await fsp.access(resolved, fs.constants.F_OK);
@@ -167,7 +167,8 @@ export async function launchBrowser(options: BrowserLauncherOptions = {}): Promi
 
   const child = spawn(executablePath, args, {
     detached: false,
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true
   });
 
   if (!child.pid) {
@@ -240,7 +241,7 @@ async function terminateProcess(child: ChildProcess): Promise<void> {
 
   if (os.platform() === "win32") {
     try {
-      await execAsync(`taskkill /pid ${child.pid} /t /f`);
+      await execFileAsync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
     } catch {
       try {
         child.kill("SIGKILL");

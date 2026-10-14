@@ -38,7 +38,7 @@ namespace NomsodMcpBackground
             );
 
             string psArgs =
-                "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
+                "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File " +
                 QuoteArgument(script) + " -Root " + QuoteArgument(root);
 
             return StartHidden(powershell, psArgs, root, true);

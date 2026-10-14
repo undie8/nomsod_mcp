@@ -61,16 +61,27 @@ export class JobManager {
     let shell: string;
     let spawnArgs: string[];
     const isWin = process.platform === "win32";
+    const requestedShell = typeof shellParam === "string" ? shellParam.trim().toLowerCase() : "";
 
-    if (shellParam) {
-      shell = shellParam;
-      spawnArgs = [command]; // or custom shell invocation
-    } else if (isWin) {
-      shell = "powershell.exe";
-      const encoded = encodePowerShellCommand(command);
-      spawnArgs = ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded];
+    if (isWin) {
+      if (requestedShell === "cmd" || requestedShell === "cmd.exe") {
+        shell = process.env.ComSpec || "cmd.exe";
+        spawnArgs = ["/d", "/s", "/c", `chcp 65001>nul & ${command}`];
+      } else {
+        shell = "powershell.exe";
+        const encoded = encodePowerShellCommand(command);
+        spawnArgs = [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-WindowStyle",
+          "Hidden",
+          "-EncodedCommand",
+          encoded
+        ];
+      }
     } else {
-      shell = "/bin/bash";
+      shell = requestedShell === "zsh" ? "/bin/zsh" : (requestedShell === "sh" ? "/bin/sh" : "/bin/bash");
       spawnArgs = ["-c", command];
     }
 
@@ -271,7 +282,7 @@ export class JobManager {
     job.status = "cancelled";
     try {
       if (process.platform === "win32") {
-        await execFileAsync("taskkill", ["/pid", String(job.pid), "/t", "/f"]);
+        await execFileAsync("taskkill", ["/pid", String(job.pid), "/t", "/f"], { windowsHide: true });
       } else {
         try {
           process.kill(-job.pid, "SIGTERM");

@@ -127,6 +127,8 @@ export async function captureScreenshot(params: ScreenshotParams = {}): Promise<
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
         "-EncodedCommand",
         encoded
       ], {

@@ -30,7 +30,7 @@ try {
     if (-not (Test-Path $syncScript)) { return }
 
     try {
-      & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $syncScript -Root $Root -PublicBaseUrl $distributionBase 1>$null
+      & powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File $syncScript -Root $Root -PublicBaseUrl $distributionBase 1>$null
       if ($LASTEXITCODE -ne 0) {
         throw "distribution sync exited with code $LASTEXITCODE"
       }
@@ -123,7 +123,7 @@ try {
     $oldUpdateFlag = $env:NOMSOD_UPDATE_IN_PROGRESS
     $env:NOMSOD_UPDATE_IN_PROGRESS = "1"
     try {
-      & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\windows\install.ps1") -Mode $role
+      & powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\windows\install.ps1") -Mode $role
     } finally {
       if ($null -eq $oldUpdateFlag) {
         Remove-Item Env:NOMSOD_UPDATE_IN_PROGRESS -ErrorAction SilentlyContinue
