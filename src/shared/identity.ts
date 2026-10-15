@@ -57,6 +57,7 @@ export function buildDescriptor(deviceId: string, version: string): DeviceDescri
       "visual.image",
       "visual.screenshot",
       "browser.cdp",
+      "desktop.automation",
       "text.utf8-strict",
       "connection.auto-reconnect",
       "agent.worker-self-heal",

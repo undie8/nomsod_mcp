@@ -476,6 +476,153 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
     );
 
     server.registerTool(
+      "desktop_click",
+      securedToolConfig(
+        {
+          title: "Click mouse at desktop coordinates",
+          description:
+            "Move mouse to (x, y) coordinates and perform mouse click (left, right, or middle, single or double click) on the target computer. Works across Windows and macOS.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            x: z.number().optional(),
+            y: z.number().optional(),
+            button: z.enum(["left", "right", "middle"]).optional(),
+            double: z.boolean().optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, x, y, button, double }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.click", { x, y, button, double })
+        )
+    );
+
+    server.registerTool(
+      "desktop_mouse_move",
+      securedToolConfig(
+        {
+          title: "Move mouse to desktop coordinates",
+          description:
+            "Move mouse cursor smoothly to exact (x, y) screen coordinates without clicking.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            x: z.number(),
+            y: z.number()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, x, y }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.mouse_move", { x, y })
+        )
+    );
+
+    server.registerTool(
+      "desktop_get_cursor_position",
+      securedToolConfig(
+        {
+          title: "Get current desktop cursor position",
+          description:
+            "Retrieve current screen coordinates (x, y) of the mouse cursor on the target computer.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1)
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.get_cursor_position")
+        )
+    );
+
+    server.registerTool(
+      "desktop_type",
+      securedToolConfig(
+        {
+          title: "Type text layout-independently",
+          description:
+            "Type text directly into the active foreground window using layout-independent Unicode input (immune to Thai or non-English keyboard layout corruption). Works on Windows and macOS.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            text: z.string(),
+            delayMs: z.number().optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, text, delayMs }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.type", { text, delayMs })
+        )
+    );
+
+    server.registerTool(
+      "desktop_key_press",
+      securedToolConfig(
+        {
+          title: "Press key or hotkey combination",
+          description:
+            "Press a keyboard key or hotkey with modifiers (e.g. key='enter', 'tab', 'escape', 'backspace', or key='c' with modifiers=['ctrl']). Works on Windows and macOS.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            key: z.string().min(1),
+            modifiers: z.array(z.enum(["ctrl", "alt", "shift", "cmd", "meta"])).optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, key, modifiers }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.key_press", { key, modifiers })
+        )
+    );
+
+    server.registerTool(
+      "desktop_list_windows",
+      securedToolConfig(
+        {
+          title: "List active application windows",
+          description:
+            "List visible application windows on the desktop with window title, process name, PID, HWND/ID, and window screen bounds (x, y, width, height).",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            filter: z.string().optional()
+          })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, filter }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.list_windows", { filter })
+        )
+    );
+
+    server.registerTool(
+      "desktop_focus_window",
+      securedToolConfig(
+        {
+          title: "Bring application window to foreground",
+          description:
+            "Activate and focus a window by its window ID/HWND, title substring, or process name so subsequent mouse and keyboard inputs target the correct application.",
+          inputSchema: z.object({
+            deviceId: z.string().min(1),
+            id: z.union([z.number(), z.string()]).optional(),
+            title: z.string().optional(),
+            processName: z.string().optional()
+          })
+        },
+        writeAnnotations
+      ),
+      async ({ deviceId, id, title, processName }) =>
+        textResult(
+          await hub.request(deviceId, "desktop.focus_window", { id, title, processName })
+        )
+    );
+
+    server.registerTool(
       "patch_text_file",
       securedToolConfig(
         {

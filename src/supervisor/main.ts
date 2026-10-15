@@ -87,6 +87,9 @@ function launchDetached(command: string, args: string[]): void {
       stdio: "ignore",
       env: process.env
     });
+    child.on("error", (error) => {
+      console.warn(`[supervisor] detached process error: ${command}: ${String(error)}`);
+    });
     child.unref();
   } catch (error) {
     console.warn(`[supervisor] detached launch failed: ${command}: ${String(error)}`);
@@ -243,7 +246,7 @@ const controlServer = http.createServer(async (req, res) => {
       const body = await readJsonBody(req);
       const result = await hub.request(
         String(body.deviceId || ""),
-        String(body.method || ""),
+        String(body.method || body.action || ""),
         body.params,
         typeof body.timeoutMs === "number" ? body.timeoutMs : undefined
       );

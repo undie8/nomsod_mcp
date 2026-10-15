@@ -69,7 +69,31 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $BackgroundOutFile)) {
 
 Copy-Item -LiteralPath $BackgroundOutFile -Destination $TunnelOutFile -Force
 
+$DesktopSource = Join-Path $PSScriptRoot "NomsodDesktopWin.cs"
+$DesktopOutFile = Join-Path $OutDir "NomsodDesktopWin.exe"
+$BackgroundDesktopOutFile = Join-Path $BackgroundOutDir "NomsodDesktopWin.exe"
+
+$desktopArgs = @(
+  "/nologo",
+  "/target:exe",
+  "/optimize+",
+  "/reference:System.dll",
+  "/reference:System.Core.dll",
+  "/reference:System.Drawing.dll",
+  "/reference:System.Windows.Forms.dll",
+  "/out:$DesktopOutFile",
+  $DesktopSource
+)
+
+& $csc @desktopArgs
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $DesktopOutFile)) {
+  throw "Failed to build NomsodDesktopWin."
+}
+
+Copy-Item -LiteralPath $DesktopOutFile -Destination $BackgroundDesktopOutFile -Force
+
 Write-Host "Built: $OutFile"
 Write-Host "Built: $BackgroundOutFile"
 Write-Host "Built: $TunnelOutFile"
+Write-Host "Built: $DesktopOutFile"
 Write-Host "Icon: $IconFile"

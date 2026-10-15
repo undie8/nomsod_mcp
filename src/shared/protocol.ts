@@ -27,6 +27,7 @@ export type GatewayPaired = {
 export type GatewayReady = {
   type: "ready";
   deviceId: string;
+  hubId?: string;
 };
 
 export type Heartbeat = {

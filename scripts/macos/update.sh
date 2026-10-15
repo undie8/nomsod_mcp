@@ -146,8 +146,8 @@ for item in "$RELEASE_ROOT"/* "$RELEASE_ROOT"/.[!.]* "$RELEASE_ROOT"/..?*; do
 done
 
 # Archives published from Windows do not preserve Unix executable bits.
-# Restore them before install.sh invokes helper scripts directly.
 chmod +x "$ROOT/scripts/macos/"*.sh
+chmod 700 "$ROOT/scripts/macos/Nomsod MCP "* 2>/dev/null || true
 
 ROLE=agent
 if [ -f "$ROOT/data/install-role.txt" ]; then

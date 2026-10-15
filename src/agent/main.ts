@@ -8,7 +8,11 @@ import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/pro
 import { getNomsodVersion } from "../shared/version.js";
 import { AgentWorkerManager } from "./worker-manager.js";
 import { JobManager } from "./job-manager.js";
-import { hasConnectedPrimaryGateway, isFallbackGatewayUrl } from "./gateway-routing.js";
+import {
+  hasConnectedPrimaryGateway,
+  isFallbackGatewayUrl,
+  shouldParkFallbackGateway
+} from "./gateway-routing.js";
 import { resolveClusterId } from "../shared/single-cluster.js";
 
 const root = process.cwd();
@@ -43,10 +47,13 @@ let healthServer: http.Server | undefined;
 const connectedGateways = new Set<string>();
 const sockets = new Set<WebSocket>();
 const socketByGatewayUrl = new Map<string, WebSocket>();
+const hubIdByGatewayUrl = new Map<string, string>();
+const discoveredPeerUrls = new Set<string>();
 const reconnectAttempts = new Map<string, number>();
 const connectingGateways = new Set<string>();
 let peerDiscoveryTimer: NodeJS.Timeout | undefined;
 let fallbackGatewayTimer: NodeJS.Timeout | undefined;
+let sleepDetectorTimer: NodeJS.Timeout | undefined;
 let identityWriteChain: Promise<void> = Promise.resolve();
 
 function resilientLookup(
@@ -296,7 +303,13 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
             ? params.url
             : typeof params.selector === "string"
               ? params.selector
-              : "";
+              : typeof params.text === "string"
+                ? params.text
+                : typeof params.key === "string"
+                  ? params.key
+                  : typeof params.title === "string"
+                    ? params.title
+                    : "";
     jobManager.recordAction(request.method, detail, Date.now() - start, "completed");
     return result;
   } catch (error) {
@@ -310,7 +323,13 @@ async function handleRequest(request: AgentRequest): Promise<unknown> {
             ? params.url
             : typeof params.selector === "string"
               ? params.selector
-              : "";
+              : typeof params.text === "string"
+                ? params.text
+                : typeof params.key === "string"
+                  ? params.key
+                  : typeof params.title === "string"
+                    ? params.title
+                    : "";
     jobManager.recordAction(request.method, detail, Date.now() - start, "failed");
     throw error;
   }
@@ -429,16 +448,19 @@ async function run(): Promise<void> {
     for (const [gatewayUrl, socket] of socketByGatewayUrl) {
       if (!isFallbackGatewayUrl(gatewayUrl)) continue;
       if (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING) continue;
-      console.log(`[agent-guardian] parking fallback gateway while a primary route is healthy: ${gatewayUrl}`);
+      if (!shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) continue;
+      console.log(`[agent-guardian] parking fallback gateway while a primary route to the same hub is healthy: ${gatewayUrl}`);
       try { socket.close(4007, "primary gateway available"); }
       catch { try { socket.terminate(); } catch {} }
     }
   }
 
   function ensureFallbackConnections(): void {
-    if (stopping || hasConnectedPrimaryGateway(connectedGateways)) return;
+    if (stopping) return;
     for (const gatewayUrl of gatewayUrls) {
-      if (isFallbackGatewayUrl(gatewayUrl)) connect(gatewayUrl);
+      if (isFallbackGatewayUrl(gatewayUrl) && !shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) {
+        connect(gatewayUrl);
+      }
     }
   }
 
@@ -450,7 +472,7 @@ async function run(): Promise<void> {
 
   const connect = (gatewayUrl: string) => {
     if (stopping || connectingGateways.has(gatewayUrl) || connectedGateways.has(gatewayUrl)) return;
-    if (isFallbackGatewayUrl(gatewayUrl) && hasConnectedPrimaryGateway(connectedGateways)) return;
+    if (isFallbackGatewayUrl(gatewayUrl) && shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) return;
     connectingGateways.add(gatewayUrl);
 
     const ws = new WebSocket(gatewayUrl, {
@@ -478,6 +500,12 @@ async function run(): Promise<void> {
       connectedGateways.delete(gatewayUrl);
       reconnectAttempts.set(gatewayUrl, 0);
       lastInbound = Date.now();
+
+      // Enable TCP keep-alive on the underlying socket (10s probe interval)
+      const netSocket = (ws as any)._socket;
+      if (netSocket && typeof netSocket.setKeepAlive === "function") {
+        try { netSocket.setKeepAlive(true, 10_000); } catch {}
+      }
 
       send({
         type: "hello",
@@ -520,8 +548,11 @@ async function run(): Promise<void> {
       if (message.type === "ready") {
         connectingGateways.delete(gatewayUrl);
         connectedGateways.add(gatewayUrl);
+        if (message.hubId) {
+          hubIdByGatewayUrl.set(gatewayUrl, message.hubId);
+        }
         reconnectAttempts.set(gatewayUrl, 0);
-        console.log(`[agent-guardian] connected and ready: ${gatewayUrl}`);
+        console.log(`[agent-guardian] connected and ready: ${gatewayUrl}${message.hubId ? ` (hub=${message.hubId})` : ""}`);
 
         if (!isFallbackGatewayUrl(gatewayUrl)) {
           if (fallbackGatewayTimer) {
@@ -567,16 +598,15 @@ async function run(): Promise<void> {
     ws.on("close", (code, reason) => {
       connectingGateways.delete(gatewayUrl);
       connectedGateways.delete(gatewayUrl);
+      hubIdByGatewayUrl.delete(gatewayUrl);
       sockets.delete(ws);
       if (socketByGatewayUrl.get(gatewayUrl) === ws) socketByGatewayUrl.delete(gatewayUrl);
       cleanupTimers();
       if (stopping) return;
 
-      if (!hasConnectedPrimaryGateway(connectedGateways)) {
-        scheduleFallbackConnections(250);
-      }
+      scheduleFallbackConnections(250);
 
-      if (isFallbackGatewayUrl(gatewayUrl) && hasConnectedPrimaryGateway(connectedGateways)) {
+      if (isFallbackGatewayUrl(gatewayUrl) && shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) {
         reconnectAttempts.set(gatewayUrl, 0);
         console.log(`[agent-guardian] fallback gateway parked: ${gatewayUrl}`);
         return;
@@ -593,7 +623,23 @@ async function run(): Promise<void> {
   };
 
   const discoverAndConnectPeers = async () => {
-    await Promise.all(discoverTailscaleGatewayUrls().map(async gatewayUrl => {
+    const livePeerUrls = new Set(discoverTailscaleGatewayUrls());
+
+    // Prune discovered peers that went offline on Tailscale
+    for (const peerUrl of discoveredPeerUrls) {
+      if (!livePeerUrls.has(peerUrl)) {
+        discoveredPeerUrls.delete(peerUrl);
+        gatewayUrls.delete(peerUrl);
+        reconnectAttempts.delete(peerUrl);
+        const ws = socketByGatewayUrl.get(peerUrl);
+        if (ws) {
+          console.log(`[agent-guardian] peer went offline on Tailscale; closing socket: ${peerUrl}`);
+          try { ws.terminate(); } catch {}
+        }
+      }
+    }
+
+    await Promise.all([...livePeerUrls].map(async gatewayUrl => {
       if (gatewayUrls.has(gatewayUrl)) {
         connect(gatewayUrl);
         return;
@@ -601,14 +647,39 @@ async function run(): Promise<void> {
 
       if (!(await probeNomsodPeerGateway(gatewayUrl))) return;
 
+      discoveredPeerUrls.add(gatewayUrl);
       gatewayUrls.add(gatewayUrl);
       console.log("[agent-guardian] discovered Nomsod peer gateway: " + gatewayUrl);
       connect(gatewayUrl);
     }));
   };
 
+  // Sleep/wake detection via timer drift
+  let lastTick = Date.now();
+  const sleepCheckIntervalMs = 2_500;
+  sleepDetectorTimer = setInterval(() => {
+    const now = Date.now();
+    const drift = now - lastTick - sleepCheckIntervalMs;
+    lastTick = now;
+    if (drift > 5_000) {
+      console.warn(`[agent-guardian] detected system sleep/wake pause (${drift}ms); resetting retry backoffs and verifying connections`);
+      reconnectAttempts.clear();
+      for (const [url, ws] of socketByGatewayUrl) {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.ping(); } catch {}
+        } else {
+          try { ws.terminate(); } catch {}
+        }
+      }
+      scheduleFallbackConnections(100);
+    }
+  }, sleepCheckIntervalMs);
+  sleepDetectorTimer.unref();
+
   for (const gatewayUrl of gatewayUrls) {
-    if (!isFallbackGatewayUrl(gatewayUrl)) connect(gatewayUrl);
+    if (!isFallbackGatewayUrl(gatewayUrl) || !shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) {
+      connect(gatewayUrl);
+    }
   }
 
   scheduleFallbackConnections();
@@ -622,6 +693,9 @@ async function shutdown(): Promise<void> {
   stopping = true;
   connectedGateways.clear();
   connectingGateways.clear();
+  hubIdByGatewayUrl.clear();
+  discoveredPeerUrls.clear();
+  if (sleepDetectorTimer) clearInterval(sleepDetectorTimer);
   if (peerDiscoveryTimer) clearInterval(peerDiscoveryTimer);
   if (fallbackGatewayTimer) clearTimeout(fallbackGatewayTimer);
 

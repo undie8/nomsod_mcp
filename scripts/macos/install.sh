@@ -275,47 +275,38 @@ install_user_agent() {
 
   if [ "$NO_START" -eq 0 ]; then
     if /bin/launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-      CURRENT_PROGRAM=$(/bin/launchctl print "$DOMAIN/$LABEL" 2>/dev/null |
-        sed -n 's/^[[:space:]]*program = //p' | head -1)
+      /bin/launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
 
-      if [ "$CURRENT_PROGRAM" = "$EXECUTABLE" ]; then
-        /bin/launchctl kickstart -k "$DOMAIN/$LABEL"
-      else
-        echo "Migrating $LABEL program path:"
-        echo "  from: $CURRENT_PROGRAM"
-        echo "  to:   $EXECUTABLE"
-
-        /bin/launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
-
-        WAIT=0
-        while /bin/launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; do
-          WAIT=$((WAIT + 1))
-          if [ "$WAIT" -ge 20 ]; then
-            echo "Timed out waiting for $LABEL to unload." >&2
-            exit 4
-          fi
-          sleep 0.25
-        done
-
-        ATTEMPT=1
-        while :; do
-          if /bin/launchctl bootstrap "$DOMAIN" "$PLIST"; then
-            break
-          fi
-          if [ "$ATTEMPT" -ge 3 ]; then
-            echo "Failed to bootstrap migrated $LABEL." >&2
-            exit 4
-          fi
-          ATTEMPT=$((ATTEMPT + 1))
-          sleep 1
-        done
-      fi
-    else
-      sleep 1
-      /bin/launchctl bootstrap "$DOMAIN" "$PLIST"
+      WAIT=0
+      while /bin/launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; do
+        WAIT=$((WAIT + 1))
+        if [ "$WAIT" -ge 20 ]; then
+          echo "Timed out waiting for $LABEL to unload." >&2
+          break
+        fi
+        sleep 0.25
+      done
     fi
+
+    ATTEMPT=1
+    while :; do
+      if /bin/launchctl bootstrap "$DOMAIN" "$PLIST"; then
+        /bin/launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || true
+        break
+      fi
+      if [ "$ATTEMPT" -ge 3 ]; then
+        echo "Failed to bootstrap $LABEL." >&2
+        exit 4
+      fi
+      ATTEMPT=$((ATTEMPT + 1))
+      sleep 1
+    done
   fi
 }
+
+if [ "$DRY_RUN" -ne 1 ]; then
+  rm -f "$ROOT/data/runtime-state.json" "$ROOT/data/agent-runtime-state.json"
+fi
 
 if [ "$MODE" = "both" ] || [ "$MODE" = "supervisor" ]; then
   if [ "$SYSTEM_SUPERVISOR" -eq 1 ]; then
@@ -392,11 +383,31 @@ if [ "$DRY_RUN" -eq 1 ]; then
 else
   if [ "$NO_START" -eq 0 ]; then
     if /bin/launchctl print "$DOMAIN/$CONTROL_LABEL" >/dev/null 2>&1; then
-      /bin/launchctl kickstart -k "$DOMAIN/$CONTROL_LABEL"
-    else
-      sleep 1
-      /bin/launchctl bootstrap "$DOMAIN" "$CONTROL_PLIST"
+      /bin/launchctl bootout "$DOMAIN/$CONTROL_LABEL" >/dev/null 2>&1 || true
+
+      WAIT=0
+      while /bin/launchctl print "$DOMAIN/$CONTROL_LABEL" >/dev/null 2>&1; do
+        WAIT=$((WAIT + 1))
+        if [ "$WAIT" -ge 20 ]; then
+          break
+        fi
+        sleep 0.25
+      done
     fi
+
+    ATTEMPT=1
+    while :; do
+      if /bin/launchctl bootstrap "$DOMAIN" "$CONTROL_PLIST"; then
+        /bin/launchctl kickstart -k "$DOMAIN/$CONTROL_LABEL" 2>/dev/null || true
+        break
+      fi
+      if [ "$ATTEMPT" -ge 3 ]; then
+        echo "Failed to bootstrap $CONTROL_LABEL." >&2
+        break
+      fi
+      ATTEMPT=$((ATTEMPT + 1))
+      sleep 1
+    done
   fi
 fi
 

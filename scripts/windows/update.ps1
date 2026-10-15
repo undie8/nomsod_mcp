@@ -154,6 +154,7 @@ try {
     }
 
     if ($role -in @("Agent", "Both")) {
+      Remove-Item (Join-Path $Root "data\agent-runtime-state.json") -Force -ErrorAction SilentlyContinue
       Restart-NomsodTask "NomsodMCP-Agent"
     }
     if ($role -in @("Supervisor", "Both")) {

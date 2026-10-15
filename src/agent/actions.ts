@@ -7,6 +7,15 @@ import { readUtf8TextFile, writeUtf8TextFile } from "../shared/text-codec.js";
 import { searchFiles } from "./search-helper.js";
 import { captureScreenshot, readImageFile } from "./visual-helper.js";
 import { browserManager } from "./browser-manager.js";
+import {
+  desktopClick,
+  desktopFocusWindow,
+  desktopGetCursorPosition,
+  desktopKeyPress,
+  desktopListWindows,
+  desktopMouseMove,
+  desktopType
+} from "./desktop-helper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -293,6 +302,51 @@ export async function executeAction(method: string, rawParams: unknown): Promise
 
     case "browser.close": {
       return browserManager.close();
+    }
+
+    case "desktop.click": {
+      const x = typeof params.x === "number" ? params.x : undefined;
+      const y = typeof params.y === "number" ? params.y : undefined;
+      const button = params.button === "right" || params.button === "middle" ? params.button : "left";
+      const double = Boolean(params.double);
+      return desktopClick({ x, y, button, double });
+    }
+
+    case "desktop.mouse_move": {
+      const x = typeof params.x === "number" ? params.x : 0;
+      const y = typeof params.y === "number" ? params.y : 0;
+      return desktopMouseMove({ x, y });
+    }
+
+    case "desktop.get_cursor":
+    case "desktop.get_cursor_position": {
+      return desktopGetCursorPosition();
+    }
+
+    case "desktop.type": {
+      const text = typeof params.text === "string" ? params.text : "";
+      const delayMs = typeof params.delayMs === "number" ? params.delayMs : undefined;
+      return desktopType({ text, delayMs });
+    }
+
+    case "desktop.key_press": {
+      const key = requiredString(params, "key");
+      const modifiers = Array.isArray(params.modifiers)
+        ? (params.modifiers as any[])
+        : undefined;
+      return desktopKeyPress({ key, modifiers });
+    }
+
+    case "desktop.list_windows": {
+      const filter = typeof params.filter === "string" ? params.filter : undefined;
+      return desktopListWindows({ filter });
+    }
+
+    case "desktop.focus_window": {
+      const id = typeof params.id === "number" || typeof params.id === "string" ? params.id : undefined;
+      const title = typeof params.title === "string" ? params.title : undefined;
+      const processName = typeof params.processName === "string" ? params.processName : undefined;
+      return desktopFocusWindow({ id, title, processName });
     }
 
     default:

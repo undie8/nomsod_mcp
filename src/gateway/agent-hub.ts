@@ -19,6 +19,7 @@ interface PendingRequest {
 }
 
 export class AgentHub {
+  private readonly hubId = "hub_" + randomUUID();
   private readonly wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   private readonly devices = new Map<string, ConnectedDevice>();
   private readonly pending = new Map<string, PendingRequest>();
@@ -131,7 +132,7 @@ export class AgentHub {
           lastSeen: Date.now()
         });
         await this.registry.seen(device);
-        ws.send(JSON.stringify({ type: "ready", deviceId: device.deviceId }));
+        ws.send(JSON.stringify({ type: "ready", deviceId: device.deviceId, hubId: this.hubId }));
         return;
       }
 
