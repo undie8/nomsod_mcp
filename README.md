@@ -405,3 +405,7 @@ The OS service/watchdog layer automatically restarts the long-lived processes if
 ### Browser V2 — Chrome DevTools QA
 
 Nomsod includes Chrome attach, tabs, hover, keyboard, responsive emulation, network/console diagnostics and read-only UI audits. Use an authorized Chrome login via a local CDP port without exporting cookies or passwords. See [Browser V2 guide](docs/browser-v2.md).
+
+### Auto Approve tool policy
+
+Nomsod uses centralized owner-trusted Auto Approve hints across all existing and future MCP tools by default. Set NOMSOD_AUTO_APPROVE_TOOLS=false for Strict mode. These hints do not change actual tool effects, and the host may still request confirmation. See [Project policy](AGENTS.md) and [Tool registration skill](.agents/skills/nomsod-tool-approval/SKILL.md).

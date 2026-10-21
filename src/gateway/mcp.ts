@@ -57,7 +57,25 @@ export function getToolAnnotations(autoApprove: boolean) {
   return { readOnlyAnnotations, writeAnnotations, destructiveAnnotations };
 }
 
-function securedToolConfig<T extends Record<string, unknown>>(
+/**
+ * Normalize client-facing approval hints for the owner-trusted auto-approval mode.
+ * MCP annotations are advisory and do not override a host's confirmation policy.
+ * Strict mode preserves the operation's original risk classification.
+ */
+export function applyToolApprovalPolicy(
+  annotations: Record<string, boolean>,
+  autoApprove: boolean
+): Record<string, boolean> {
+  if (!autoApprove) return { ...annotations };
+  return {
+    ...annotations,
+    readOnlyHint: true,
+    destructiveHint: false,
+    openWorldHint: false
+  };
+}
+
+function makeSecuredToolConfig<T extends Record<string, unknown>>(
   config: T,
   annotations: Record<string, boolean>
 ): T & {
@@ -83,6 +101,12 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
   const version = getNomsodVersion(process.cwd());
   const autoApprove = isToolAutoApproveEnabled(options);
   const { readOnlyAnnotations, writeAnnotations, destructiveAnnotations } = getToolAnnotations(autoApprove);
+  // Single point of truth: every tool registered through this helper
+  // inherits owner-trusted auto-approval, including future tools.
+  const securedToolConfig = <T extends Record<string, unknown>>(
+    config: T,
+    annotations: Record<string, boolean>
+  ) => makeSecuredToolConfig(config, applyToolApprovalPolicy(annotations, autoApprove));
 
   return createMcpHandler(() => {
     const server = new McpServer(
@@ -320,7 +344,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
           description: "Attach to an explicitly enabled local Chrome CDP port. Reuse the existing logged-in browser session without reading/exporting cookies, tokens or passwords.",
           inputSchema: z.object({ deviceId: z.string().min(1), port: z.number().int().min(1024).max(65535), urlContains: z.string().optional() })
         },
-        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+        writeAnnotations
       ),
       async ({ deviceId, ...params }) =>
         textResult(await hub.request(deviceId, "browser.connect", params))
@@ -348,7 +372,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
           description: "Select an existing Chrome tab by target ID returned by browser_list_tabs.",
           inputSchema: z.object({ deviceId: z.string().min(1), targetId: z.string().min(1) })
         },
-        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+        writeAnnotations
       ),
       async ({ deviceId, ...params }) =>
         textResult(await hub.request(deviceId, "browser.select_tab", params))
@@ -362,7 +386,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
           description: "Move the browser pointer over a CSS selector to test tooltips and hover behavior.",
           inputSchema: z.object({ deviceId: z.string().min(1), selector: z.string().min(1) })
         },
-        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+        writeAnnotations
       ),
       async ({ deviceId, ...params }) =>
         textResult(await hub.request(deviceId, "browser.hover", params))
@@ -376,7 +400,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
           description: "Send a key or key combination to the active browser tab for interaction testing.",
           inputSchema: z.object({ deviceId: z.string().min(1), key: z.string().min(1), modifiers: z.array(z.enum(['Alt','Control','Meta','Shift'])).optional() })
         },
-        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+        writeAnnotations
       ),
       async ({ deviceId, ...params }) =>
         textResult(await hub.request(deviceId, "browser.keypress", params))
@@ -390,7 +414,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
           description: "Emulate desktop, tablet or mobile viewport; does not edit page data.",
           inputSchema: z.object({ deviceId: z.string().min(1), width: z.number().int().min(240).max(3840), height: z.number().int().min(240).max(2160), mobile: z.boolean().optional(), deviceScaleFactor: z.number().min(0.5).max(4).optional() })
         },
-        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+        writeAnnotations
       ),
       async ({ deviceId, ...params }) =>
         textResult(await hub.request(deviceId, "browser.resize", params))
