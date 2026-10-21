@@ -11,6 +11,7 @@
 ## ✅ Completed
 | ID | Title | Completed Date |
 |---|---|---|
+| [TASK-012](completed/TASK-012-central-tool-auto-approve.md) | Centralize Auto Approve for all MCP tools and add project policy/skill | 2026-10-21 |
 | [TASK-011](completed/TASK-011-macos-lwcr-launchd-hardening.md) | macOS LWCR Launchd Hardening & Mac Node v0.4.22 Deployment | 2026-10-15 |
 | [TASK-010](completed/TASK-010-desktop-automation-cross-platform.md) | Cross-Platform Desktop Automation & Connection Stability Hardening | 2026-10-15 |
 | [TASK-009](completed/TASK-009-silent-background-execution-windows.md) | Suppress Console Window Popups for Silent Background Execution on Windows | 2026-10-15 |
