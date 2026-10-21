@@ -401,3 +401,7 @@ Image generation remains a ChatGPT capability. Nomsod MCP is the secure bridge b
 Gateway Runtime and Action Worker code can update, roll back, crash, and recover without intentionally dropping the long-lived Supervisor/Guardian connections.
 
 The OS service/watchdog layer automatically restarts the long-lived processes if they fail. A Supervisor process failure, machine reboot, network outage, or host failure can still cause a brief transport interruption; the architecture is designed to recover automatically rather than require manual reconnection.
+
+### Browser V2 — Chrome DevTools QA
+
+Nomsod includes Chrome attach, tabs, hover, keyboard, responsive emulation, network/console diagnostics and read-only UI audits. Use an authorized Chrome login via a local CDP port without exporting cookies or passwords. See [Browser V2 guide](docs/browser-v2.md).

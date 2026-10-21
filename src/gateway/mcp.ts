@@ -313,6 +313,146 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
     );
 
     server.registerTool(
+      "browser_connect",
+      securedToolConfig(
+        {
+          title: "Attach to an already open Chrome",
+          description: "Attach to an explicitly enabled local Chrome CDP port. Reuse the existing logged-in browser session without reading/exporting cookies, tokens or passwords.",
+          inputSchema: z.object({ deviceId: z.string().min(1), port: z.number().int().min(1024).max(65535), urlContains: z.string().optional() })
+        },
+        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.connect", params))
+    );
+
+    server.registerTool(
+      "browser_list_tabs",
+      securedToolConfig(
+        {
+          title: "List Chrome tabs",
+          description: "List tabs in the attached or Nomsod-launched Chrome browser; URL query parameters are redacted.",
+          inputSchema: z.object({ deviceId: z.string().min(1) })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.tabs", params))
+    );
+
+    server.registerTool(
+      "browser_select_tab",
+      securedToolConfig(
+        {
+          title: "Select Chrome tab",
+          description: "Select an existing Chrome tab by target ID returned by browser_list_tabs.",
+          inputSchema: z.object({ deviceId: z.string().min(1), targetId: z.string().min(1) })
+        },
+        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.select_tab", params))
+    );
+
+    server.registerTool(
+      "browser_hover",
+      securedToolConfig(
+        {
+          title: "Hover browser element",
+          description: "Move the browser pointer over a CSS selector to test tooltips and hover behavior.",
+          inputSchema: z.object({ deviceId: z.string().min(1), selector: z.string().min(1) })
+        },
+        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.hover", params))
+    );
+
+    server.registerTool(
+      "browser_keypress",
+      securedToolConfig(
+        {
+          title: "Send browser key",
+          description: "Send a key or key combination to the active browser tab for interaction testing.",
+          inputSchema: z.object({ deviceId: z.string().min(1), key: z.string().min(1), modifiers: z.array(z.enum(['Alt','Control','Meta','Shift'])).optional() })
+        },
+        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.keypress", params))
+    );
+
+    server.registerTool(
+      "browser_resize",
+      securedToolConfig(
+        {
+          title: "Resize browser viewport",
+          description: "Emulate desktop, tablet or mobile viewport; does not edit page data.",
+          inputSchema: z.object({ deviceId: z.string().min(1), width: z.number().int().min(240).max(3840), height: z.number().int().min(240).max(2160), mobile: z.boolean().optional(), deviceScaleFactor: z.number().min(0.5).max(4).optional() })
+        },
+        { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.resize", params))
+    );
+
+    server.registerTool(
+      "browser_wait",
+      securedToolConfig(
+        {
+          title: "Wait for browser element",
+          description: "Wait for a CSS selector to appear, optionally requiring visible layout.",
+          inputSchema: z.object({ deviceId: z.string().min(1), selector: z.string().min(1), timeoutMs: z.number().int().min(200).max(30000).optional(), visible: z.boolean().optional() })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.wait", params))
+    );
+
+    server.registerTool(
+      "browser_console",
+      securedToolConfig(
+        {
+          title: "Read browser console diagnostics",
+          description: "Read bounded console errors and messages from the selected tab. Avoid exposing secrets in logs.",
+          inputSchema: z.object({ deviceId: z.string().min(1), errorsOnly: z.boolean().optional(), limit: z.number().int().min(1).max(200).optional() })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.console", params))
+    );
+
+    server.registerTool(
+      "browser_network",
+      securedToolConfig(
+        {
+          title: "Inspect browser network diagnostics",
+          description: "Read request URL paths, status codes and failures only. No headers, cookies, query strings or bodies are returned.",
+          inputSchema: z.object({ deviceId: z.string().min(1), failuresOnly: z.boolean().optional(), limit: z.number().int().min(1).max(200).optional() })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.network", params))
+    );
+
+    server.registerTool(
+      "browser_audit",
+      securedToolConfig(
+        {
+          title: "Run read-only browser QA audit",
+          description: "Check viewport overflow, missing element labels, missing alt text and navigation timing without modifying user data.",
+          inputSchema: z.object({ deviceId: z.string().min(1) })
+        },
+        readOnlyAnnotations
+      ),
+      async ({ deviceId, ...params }) =>
+        textResult(await hub.request(deviceId, "browser.audit", params))
+    );
+
+    server.registerTool(
       "browser_navigate",
       securedToolConfig(
         {

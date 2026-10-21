@@ -15,6 +15,11 @@ import type {
 } from "../shared/browser-types.js";
 import { launchBrowser, type LaunchedBrowser } from "./browser-launcher.js";
 
+type BrowserNetworkRecord = {
+  requestId: string; method?: string; url: string; type?: string;
+  status?: number; error?: string; timestamp: number;
+};
+
 export class BrowserManager {
   private browser: LaunchedBrowser | null = null;
   private ws: WebSocket | null = null;
@@ -27,64 +32,139 @@ export class BrowserManager {
   private consoleLogs: BrowserConsoleLog[] = [];
   private hasErrors = false;
 
-  private async ensureBrowser(): Promise<void> {
-    if (this.browser && this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return;
-    }
+  private attachedPort: number | null = null;
+  private activeTargetId: string | null = null;
+  private networkRequests: BrowserNetworkRecord[] = [];
 
-    if (this.browser) {
-      await this.close();
-    }
+  private async targets(port: number): Promise<Array<{
+    id: string; type: string; title: string; url: string; webSocketDebuggerUrl?: string;
+  }>> {
+    const res = await fetch("http://127.0.0.1:" + port + "/json/list", {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) throw new Error("Chrome DevTools not responding on localhost port " + port);
+    const body = await res.json();
+    if (!Array.isArray(body)) throw new Error("Unexpected Chrome DevTools targets response");
+    return body.filter((item: any) => item && item.type === "page" && typeof item.id === "string");
+  }
 
-    this.browser = await launchBrowser({ headless: true });
+  private safeUrl(raw: string): string {
+    try {
+      const url = new URL(raw);
+      url.username = "";
+      url.password = "";
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return String(raw || "").split(/[?#]/, 1)[0].slice(0, 500);
+    }
+  }
+
+  private safeDiagnosticText(raw: string): string {
+    return String(raw || "").slice(0, 1500)
+      .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]+/gi, "$1[REDACTED]")
+      .replace(/((?:access_token|refresh_token|id_token|password|authorization|cookie)\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)/gi, "$1[REDACTED]")
+      .replace(/\beyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[JWT REDACTED]");
+  }
+
+  private rememberRequest(requestId: string, change: Record<string, unknown>): void {
+    const previous = this.networkRequests.find(item => item.requestId === requestId);
+    if (previous) {
+      Object.assign(previous, change);
+    } else {
+      this.networkRequests.push({ requestId, url: "", timestamp: Date.now(), ...change });
+      if (this.networkRequests.length > 250) this.networkRequests.shift();
+    }
+  }
+
+  private registerDiagnostics(): void {
+    this.eventListeners.clear();
     this.consoleLogs = [];
     this.hasErrors = false;
+    this.networkRequests = [];
+    this.on("Runtime.consoleAPICalled", (params: any) => {
+      const type: BrowserConsoleLog["type"] =
+        params.type === "error" ? "error" : params.type === "warning" ? "warn" : "log";
+      if (type === "error") this.hasErrors = true;
+      const message = (params.args || [])
+        .map((a: any) => a.value === undefined ? (a.description || "") : String(a.value))
+        .join(" ");
+      this.consoleLogs.push({ type, text: this.safeDiagnosticText(message), timestamp: Date.now() });
+      if (this.consoleLogs.length > 200) this.consoleLogs.shift();
+    });
+    this.on("Runtime.exceptionThrown", (params: any) => {
+      this.hasErrors = true;
+      const message = params.exceptionDetails?.exception?.description ||
+        params.exceptionDetails?.text || "Unknown exception";
+      this.consoleLogs.push({ type: "error", text: this.safeDiagnosticText(message), timestamp: Date.now() });
+      if (this.consoleLogs.length > 200) this.consoleLogs.shift();
+    });
+    this.on("Network.requestWillBeSent", (params: any) => {
+      const requestId = String(params.requestId || "");
+      if (!requestId) return;
+      this.rememberRequest(requestId, {
+        url: this.safeUrl(params.request?.url || ""),
+        method: params.request?.method || "GET",
+        type: params.type || "Other",
+        timestamp: Date.now()
+      });
+    });
+    this.on("Network.responseReceived", (params: any) => {
+      const requestId = String(params.requestId || "");
+      if (!requestId) return;
+      this.rememberRequest(requestId, {
+        url: this.safeUrl(params.response?.url || ""),
+        status: params.response?.status,
+        type: params.type || "Other"
+      });
+    });
+    this.on("Network.loadingFailed", (params: any) => {
+      const requestId = String(params.requestId || "");
+      if (!requestId) return;
+      this.rememberRequest(requestId, {
+        error: String(params.errorText || "Network loading failed").slice(0, 250)
+      });
+    });
+  }
 
-    const res = await fetch(`http://127.0.0.1:${this.browser.port}/json`);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch browser targets from port ${this.browser.port}`);
+  private async connectTarget(target: { id: string; webSocketDebuggerUrl?: string }, port: number): Promise<void> {
+    if (!target.webSocketDebuggerUrl) throw new Error("Selected Chrome tab does not expose a CDP endpoint");
+    const endpoint = new URL(target.webSocketDebuggerUrl);
+    if (endpoint.protocol !== "ws:" ||
+        !["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname) ||
+        Number(endpoint.port) !== port) {
+      throw new Error("Only loopback Chrome DevTools endpoints are allowed");
     }
-
-    const targets = (await res.json()) as Array<{ type: string; webSocketDebuggerUrl?: string }>;
-    const pageTarget = targets.find((t) => t.type === "page") || targets[0];
-    if (!pageTarget || !pageTarget.webSocketDebuggerUrl) {
-      throw new Error("No valid browser page target found.");
+    if (this.ws) {
+      const previous = this.ws;
+      this.ws = null;
+      previous.close();
     }
-
-    await this.connectWs(pageTarget.webSocketDebuggerUrl);
-
+    await this.connectWs(endpoint.toString());
+    this.activeTargetId = target.id;
+    this.registerDiagnostics();
     await this.send("Page.enable");
     await this.send("Runtime.enable");
     await this.send("DOM.enable");
+    await this.send("Network.enable", { maxTotalBufferSize: 1000000 });
+  }
 
-    this.on("Runtime.consoleAPICalled", (params: any) => {
-      const type = params.type === "error" ? "error" : params.type === "warning" ? "warn" : "log";
-      if (type === "error") this.hasErrors = true;
-      const text = (params.args || [])
-        .map((a: any) => (a.value !== undefined ? String(a.value) : a.description || ""))
-        .join(" ");
-      this.consoleLogs.push({
-        type,
-        text,
-        timestamp: Date.now()
-      });
-      if (this.consoleLogs.length > 200) {
-        this.consoleLogs.shift();
-      }
-    });
-
-    this.on("Runtime.exceptionThrown", (params: any) => {
-      this.hasErrors = true;
-      const desc = params.exceptionDetails?.exception?.description || params.exceptionDetails?.text || "Unknown exception";
-      this.consoleLogs.push({
-        type: "error",
-        text: desc,
-        timestamp: Date.now()
-      });
-      if (this.consoleLogs.length > 200) {
-        this.consoleLogs.shift();
-      }
-    });
+  private async ensureBrowser(): Promise<void> {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    if (this.attachedPort !== null) {
+      const available = await this.targets(this.attachedPort);
+      const target = available.find(t => t.id === this.activeTargetId) || available[0];
+      if (!target) throw new Error("Attached Chrome has no accessible page; reconnect or select a tab");
+      await this.connectTarget(target, this.attachedPort);
+      return;
+    }
+    if (this.browser) await this.close();
+    this.browser = await launchBrowser({ headless: true });
+    const available = await this.targets(this.browser.port);
+    const target = available[0];
+    if (!target) throw new Error("No Chrome page found in headless browser");
+    await this.connectTarget(target, this.browser.port);
   }
 
   private async connectWs(url: string): Promise<void> {
@@ -116,7 +196,7 @@ export class BrowserManager {
           pending.reject(new Error(`CDP connection closed while waiting for ${pending.method}`));
         }
         this.pendingRequests.clear();
-        this.ws = null;
+        if (this.ws === ws) this.ws = null;
       });
     });
   }
@@ -316,7 +396,8 @@ export class BrowserManager {
             if (node.getAttribute('aria-label')) attrs += ' aria-label="' + node.getAttribute('aria-label') + '"';
             if (tag === 'a' && node.href) attrs += ' href="' + node.href + '"';
             if (tag === 'button') attrs += ' button';
-            if (tag === 'input' && node.type) attrs += ' type="' + node.type + '" value="' + node.value + '"';
+            // Do not reveal typed input values, passwords, or account identifiers in snapshots.
+            if (tag === 'input' && node.type) attrs += ' type="' + node.type + '"';
 
             const children = Array.from(node.childNodes)
               .map(c => getTree(c, depth + 1))
@@ -350,7 +431,8 @@ export class BrowserManager {
     await this.ensureBrowser();
     const fullPage = params.fullPage || false;
 
-    if (fullPage) {
+    // Avoid changing a user-owned Chrome window when capturing a full-page screenshot.
+    if (fullPage && this.attachedPort === null) {
       try {
         const metrics = await this.send("Page.getLayoutMetrics");
         const contentSize = metrics?.contentSize || metrics?.cssContentSize;
@@ -380,7 +462,188 @@ export class BrowserManager {
     };
   }
 
+
+  /** Attach only to a user-enabled local debugging port. Does not read cookies or passwords. */
+  public async connect(params: { port: number; urlContains?: string }): Promise<{
+    ok: boolean; mode: "attached"; port: number; targetId: string; url: string; title: string;
+  }> {
+    const port = params.port;
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      throw new Error("CDP port must be an integer between 1024 and 65535");
+    }
+    const available = await this.targets(port);
+    const target = params.urlContains
+      ? available.find(t => t.url.includes(params.urlContains!))
+      : available[0];
+    if (!target) throw new Error("No matching Chrome tab found. Open the page in Chrome first.");
+    if (this.browser) await this.close();
+    this.attachedPort = port;
+    try {
+      await this.connectTarget(target, port);
+      return {
+        ok: true, mode: "attached", port, targetId: target.id,
+        url: this.safeUrl(target.url), title: target.title
+      };
+    } catch (err) {
+      this.attachedPort = null;
+      throw err;
+    }
+  }
+
+  public async listTabs(): Promise<{
+    mode: "attached" | "headless";
+    tabs: Array<{ id: string; title: string; url: string; selected: boolean }>;
+  }> {
+    if (this.attachedPort === null && !this.browser) await this.ensureBrowser();
+    const port = this.attachedPort ?? this.browser!.port;
+    const tabs = await this.targets(port);
+    return {
+      mode: this.attachedPort !== null ? "attached" : "headless",
+      tabs: tabs.map(t => ({
+        id: t.id, title: t.title, url: this.safeUrl(t.url), selected: t.id === this.activeTargetId
+      }))
+    };
+  }
+
+  public async selectTab(targetId: string): Promise<{ ok: boolean; targetId: string; url: string }> {
+    if (this.attachedPort === null && !this.browser) throw new Error("Connect to Chrome or navigate first");
+    const port = this.attachedPort ?? this.browser!.port;
+    const target = (await this.targets(port)).find(t => t.id === targetId);
+    if (!target) throw new Error("Requested tab not found");
+    await this.connectTarget(target, port);
+    return { ok: true, targetId, url: this.safeUrl(target.url) };
+  }
+
+  public async hover(selector: string): Promise<{ ok: boolean; selector: string }> {
+    await this.ensureBrowser();
+    const expression = "(() => { const e=document.querySelector(" + JSON.stringify(selector) +
+      "); if(!e) return null; e.scrollIntoView({block:'center'});" +
+      "const r=e.getBoundingClientRect(); if(!r.width||!r.height) return null;" +
+      "return {x:r.left+r.width/2,y:r.top+r.height/2}; })()";
+    const result = await this.send("Runtime.evaluate", { expression, returnByValue: true });
+    const point = result?.result?.value;
+    if (!point) throw new Error("Hover target missing or hidden: " + selector);
+    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+    return { ok: true, selector };
+  }
+
+  public async keypress(params: { key: string; modifiers?: Array<"Alt" | "Control" | "Meta" | "Shift"> }): Promise<{
+    ok: boolean; key: string;
+  }> {
+    await this.ensureBrowser();
+    const keyCodes: Record<string, number> = {
+      Enter: 13, Escape: 27, Tab: 9, Backspace: 8, Delete: 46,
+      ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Space: 32
+    };
+    const key = params.key;
+    if (!Object.hasOwn(keyCodes, key) && !/^[a-zA-Z0-9]$/.test(key)) {
+      throw new Error("Unsupported key: " + key);
+    }
+    const mask: Record<string, number> = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+    const modifiers = (params.modifiers || []).reduce((sum, item) => sum | (mask[item] || 0), 0);
+    const windowsVirtualKeyCode = keyCodes[key] ?? key.toUpperCase().charCodeAt(0);
+    const args = { key: key === "Space" ? " " : key, modifiers, windowsVirtualKeyCode };
+    await this.send("Input.dispatchKeyEvent", { type: "keyDown", ...args });
+    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...args });
+    return { ok: true, key };
+  }
+
+  public async resize(params: { width: number; height: number; mobile?: boolean; deviceScaleFactor?: number }): Promise<{
+    ok: boolean; width: number; height: number; mobile: boolean;
+  }> {
+    await this.ensureBrowser();
+    const { width, height, mobile = false, deviceScaleFactor = 1 } = params;
+    if (!Number.isInteger(width) || width < 240 || width > 3840 ||
+        !Number.isInteger(height) || height < 240 || height > 2160 ||
+        !Number.isFinite(deviceScaleFactor) || deviceScaleFactor < 0.5 || deviceScaleFactor > 4) {
+      throw new Error("Invalid viewport size or device scale factor");
+    }
+    await this.send("Emulation.setDeviceMetricsOverride", { width, height, mobile, deviceScaleFactor });
+    return { ok: true, width, height, mobile };
+  }
+
+  public async waitFor(params: { selector: string; timeoutMs?: number; visible?: boolean }): Promise<{
+    ok: boolean; selector: string; elapsedMs: number;
+  }> {
+    await this.ensureBrowser();
+    const timeout = Math.min(Math.max(params.timeoutMs || 10000, 200), 30000);
+    const started = Date.now();
+    const expression = "(() => {const el=document.querySelector(" + JSON.stringify(params.selector) +
+      "); if(!el) return false; if(!" + Boolean(params.visible) + ")return true;" +
+      "const r=el.getBoundingClientRect(); const s=getComputedStyle(el);" +
+      "return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'; })()";
+    while (Date.now() - started < timeout) {
+      const result = await this.send("Runtime.evaluate", { expression, returnByValue: true }, 5000);
+      if (result?.result?.value === true) {
+        return { ok: true, selector: params.selector, elapsedMs: Date.now() - started };
+      }
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    throw new Error("Timed out waiting for element: " + params.selector);
+  }
+
+  public async consoleMessages(params: { errorsOnly?: boolean; limit?: number } = {}): Promise<{
+    count: number; messages: BrowserConsoleLog[];
+  }> {
+    await this.ensureBrowser();
+    const messages = params.errorsOnly ? this.consoleLogs.filter(x => x.type === "error") : this.consoleLogs;
+    const limit = Math.min(Math.max(params.limit || 50, 1), 200);
+    return { count: messages.length, messages: messages.slice(-limit) };
+  }
+
+  public async networkMessages(params: { failuresOnly?: boolean; limit?: number } = {}): Promise<{
+    count: number; requests: BrowserNetworkRecord[];
+  }> {
+    await this.ensureBrowser();
+    const requests = params.failuresOnly
+      ? this.networkRequests.filter(x => (x.status ?? 0) >= 400 || Boolean(x.error))
+      : this.networkRequests;
+    const limit = Math.min(Math.max(params.limit || 50, 1), 200);
+    return { count: requests.length, requests: requests.slice(-limit) };
+  }
+
+  /** Lightweight, read-only accessibility, responsive and navigation performance check. */
+  public async audit(): Promise<{
+    url: string;
+    viewport: { width: number; height: number; documentWidth: number };
+    horizontalOverflow: boolean;
+    missingImageAlt: number;
+    unlabeledInputs: number;
+    unlabeledButtons: number;
+    navigationTiming: Record<string, number> | null;
+  }> {
+    await this.ensureBrowser();
+    const expression = [
+      "(() => {",
+      "const inputs=[...document.querySelectorAll('input:not([type=hidden]),select,textarea')];",
+      "const buttons=[...document.querySelectorAll('button,[role=button]')];",
+      "const images=[...document.querySelectorAll('img')];",
+      "const hasName = e => Boolean((e.getAttribute('aria-label')||'').trim() ||",
+      "(e.getAttribute('aria-labelledby')||'').trim() ||",
+      "(e.getAttribute('title')||'').trim() ||",
+      "(e.innerText||e.textContent||'').trim());",
+      "const nav=performance.getEntriesByType('navigation')[0];",
+      "return { url: location.origin+location.pathname,",
+      "viewport: {width:innerWidth,height:innerHeight,documentWidth:document.documentElement.scrollWidth},",
+      "horizontalOverflow:document.documentElement.scrollWidth>innerWidth+1,",
+      "missingImageAlt:images.filter(e=>!e.hasAttribute('alt')).length,",
+      "unlabeledInputs:inputs.filter(e=>!(e.labels&&e.labels.length)&&!hasName(e)).length,",
+      "unlabeledButtons:buttons.filter(e=>!hasName(e)).length,",
+      "navigationTiming:nav ? {",
+      "dnsMs:Math.round(nav.domainLookupEnd-nav.domainLookupStart),",
+      "connectMs:Math.round(nav.connectEnd-nav.connectStart),",
+      "responseMs:Math.round(nav.responseEnd-nav.responseStart),",
+      "domContentLoadedMs:Math.round(nav.domContentLoadedEventEnd),",
+      "loadMs:Math.round(nav.loadEventEnd)",
+      "} : null }; })()"
+    ].join("");
+    const result = await this.send("Runtime.evaluate", { expression, returnByValue: true });
+    if (result?.exceptionDetails) throw new Error("Browser audit failed");
+    return result.result.value;
+  }
+
   public async close(): Promise<BrowserCloseResult> {
+    const wasAttached = this.attachedPort !== null;
     if (this.ws) {
       try {
         this.ws.close();
@@ -395,9 +658,13 @@ export class BrowserManager {
       this.browser = null;
     }
 
+    this.attachedPort = null;
+    this.activeTargetId = null;
+    this.eventListeners.clear();
     this.consoleLogs = [];
+    this.networkRequests = [];
     this.hasErrors = false;
-    return { ok: true, message: "Browser closed successfully" };
+    return { ok: true, message: wasAttached ? "Detached from Chrome; user browser remains running" : "Headless browser closed" };
   }
 }
 

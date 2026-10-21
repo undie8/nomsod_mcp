@@ -271,6 +271,52 @@ export async function executeAction(method: string, rawParams: unknown): Promise
       return captureScreenshot({ screenMode });
     }
 
+
+    case "browser.connect": {
+      const port = typeof params.port === "number" ? params.port : 0;
+      const urlContains = typeof params.urlContains === "string" ? params.urlContains : undefined;
+      return browserManager.connect({ port, urlContains });
+    }
+    case "browser.tabs":
+      return browserManager.listTabs();
+    case "browser.select_tab":
+      return browserManager.selectTab(requiredString(params, "targetId"));
+    case "browser.hover":
+      return browserManager.hover(requiredString(params, "selector"));
+    case "browser.keypress": {
+      const key = requiredString(params, "key");
+      const modifiers = Array.isArray(params.modifiers)
+        ? params.modifiers.filter((x): x is "Alt" | "Control" | "Meta" | "Shift" =>
+            x === "Alt" || x === "Control" || x === "Meta" || x === "Shift")
+        : [];
+      return browserManager.keypress({ key, modifiers });
+    }
+    case "browser.resize":
+      return browserManager.resize({
+        width: typeof params.width === "number" ? params.width : 0,
+        height: typeof params.height === "number" ? params.height : 0,
+        mobile: params.mobile === true,
+        deviceScaleFactor: typeof params.deviceScaleFactor === "number" ? params.deviceScaleFactor : 1
+      });
+    case "browser.wait":
+      return browserManager.waitFor({
+        selector: requiredString(params, "selector"),
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        visible: params.visible === true
+      });
+    case "browser.console":
+      return browserManager.consoleMessages({
+        errorsOnly: params.errorsOnly === true,
+        limit: typeof params.limit === "number" ? params.limit : undefined
+      });
+    case "browser.network":
+      return browserManager.networkMessages({
+        failuresOnly: params.failuresOnly === true,
+        limit: typeof params.limit === "number" ? params.limit : undefined
+      });
+    case "browser.audit":
+      return browserManager.audit();
+
     case "browser.navigate": {
       const url = requiredString(params, "url");
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : undefined;
