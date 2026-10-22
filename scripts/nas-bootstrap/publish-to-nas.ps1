@@ -17,7 +17,12 @@ if (-not (Test-Path $exporter)) { throw "Installed Nomsod recovery exporter is m
 if (-not (Test-Path $versionFile)) { throw "Installed Nomsod VERSION is missing." }
 
 $version = ([IO.File]::ReadAllText($versionFile)).Trim()
-$work = Join-Path $env:TEMP ("nomsod-nas-bootstrap-" + [guid]::NewGuid().ToString("N"))
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$work = [IO.Path]::GetFullPath((Join-Path $tempRoot ("nomsod-nas-bootstrap-" + [guid]::NewGuid().ToString("N"))))
+if ([IO.Path]::GetDirectoryName($work) -ne $tempRoot -or
+    -not ([IO.Path]::GetFileName($work)).StartsWith("nomsod-nas-bootstrap-")) {
+  throw "Unsafe NAS bootstrap temporary directory."
+}
 $zip = Join-Path $work "bundle.zip"
 $extract = Join-Path $work "extract"
 $packageRoot = Join-Path $work "current"

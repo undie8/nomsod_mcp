@@ -786,6 +786,7 @@ namespace NomsodMcpControl
             public string Command { get; set; }
             public string Status { get; set; }
             public string Pid { get; set; }
+            public long StartedAt { get; set; }
             public long DurationMs { get; set; }
             public string StdoutTail { get; set; }
             public string StderrTail { get; set; }
@@ -800,7 +801,7 @@ namespace NomsodMcpControl
                 form.Text = "Nomsod MCP - Active Jobs & Live Monitor";
                 form.FormBorderStyle = FormBorderStyle.Sizable;
                 form.StartPosition = FormStartPosition.CenterScreen;
-                form.ClientSize = new Size(780, 520);
+                form.ClientSize = new Size(940, 520);
                 form.MinimumSize = new Size(680, 460);
                 form.Icon = appIcon;
                 form.Font = new Font("Segoe UI", 9.5f);
@@ -817,6 +818,7 @@ namespace NomsodMcpControl
                     FullRowSelect = true,
                     GridLines = true
                 };
+                listView.Columns.Add("Started", 155);
                 listView.Columns.Add("Status", 90);
                 listView.Columns.Add("Duration", 80);
                 listView.Columns.Add("Command", 310);
@@ -921,6 +923,7 @@ namespace NomsodMcpControl
                             string pidText = String.IsNullOrEmpty(job.Pid) ? "-" : job.Pid;
 
                             var item = new ListViewItem(new string[] {
+                                FormatStartedAt(job.StartedAt),
                                 statusText,
                                 durationText,
                                 job.Command ?? "",
@@ -955,6 +958,7 @@ namespace NomsodMcpControl
                             listView.Items[0].Selected = true;
                         }
                         listView.EndUpdate();
+                        if (listView.Items.Count == 0) txtOutput.Text = "";
                     }
                     catch
                     {
@@ -1043,6 +1047,18 @@ namespace NomsodMcpControl
             }
         }
 
+        private static string FormatStartedAt(long timestamp)
+        {
+            if (timestamp <= 0) return "-";
+            try
+            {
+                return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+                    .AddMilliseconds(timestamp).ToLocalTime()
+                    .ToString("dd/MM/yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (ArgumentOutOfRangeException) { return "-"; }
+        }
+
         private static string FormatDuration(long ms)
         {
             if (ms < 1000) return ms + "ms";
@@ -1077,6 +1093,7 @@ namespace NomsodMcpControl
                 long pidVal = JsonLong(objJson, "pid", 0);
                 job.Pid = pidVal > 0 ? pidVal.ToString() : JsonString(objJson, "pid");
                 if (String.IsNullOrEmpty(job.Pid)) job.Pid = "-";
+                job.StartedAt = JsonLong(objJson, "startedAt", 0);
                 job.DurationMs = JsonLong(objJson, "durationMs", 0);
                 job.StdoutTail = JsonString(objJson, "stdoutTail");
                 job.StderrTail = JsonString(objJson, "stderrTail");
@@ -1086,6 +1103,9 @@ namespace NomsodMcpControl
                     list.Add(job);
                 }
             }
+            list.Sort(delegate(JobItem left, JobItem right) {
+                return right.StartedAt.CompareTo(left.StartedAt);
+            });
             return list;
         }
 

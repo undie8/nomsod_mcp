@@ -319,6 +319,10 @@ The compiled bootstraps load `.env` automatically and write UTF-8 logs under `da
 
 Set `NOMSOD_LOG_DIR` to use a different log location.
 
+Agent connections use one pending retry per gateway, preserving backoff across peer discovery and cancelling retries for removed peers. After a long event-loop pause, open connections get up to 30 seconds (bounded by the stale timeout) to recover heartbeat traffic before they are considered stale. Run `npx vitest run tests/connection-recovery.test.ts tests/guardian-recovery.test.ts` for scheduling and real WebSocket recovery checks.
+
+On a Mac that should remain available while plugged in, a user LaunchAgent running `/usr/bin/caffeinate -s` can prevent system sleep on AC power while allowing display sleep and preserving battery sleep settings. This is a local availability preference, not an installer default; forced sleep, shutdown and lid-close behavior still follow macOS policy.
+
 
 ## Versioned distribution and terminal installation
 

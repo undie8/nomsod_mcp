@@ -3,6 +3,7 @@
 ## ⏳ In Progress
 | ID | Title | Owner | Target |
 |---|---|---|---|
+| [TASK-017](in-progress/TASK-017-release-0-4-24.md) | Publish and deploy Nomsod MCP 0.4.24 | Codex | main / distribution / devices |
 
 ## 📋 Planned
 | ID | Title | Priority |
@@ -11,6 +12,8 @@
 ## ✅ Completed
 | ID | Title | Completed Date |
 |---|---|---|
+| [TASK-016](completed/TASK-016-mac-power-reconnect.md) | Mac AC-only availability and reconnect recovery | 2026-10-23 |
+| [TASK-015](completed/TASK-015-live-monitor-time-order.md) | Live Monitor newest-first rows and start time | 2026-10-23 |
 | [TASK-014](completed/TASK-014-fix-control-ui-not-paired-display.md) | Fix Control UI "(not paired)" Display Bug | 2026-10-22 |
 | [TASK-013](completed/TASK-013-install-windows-agent.md) | Install Nomsod MCP Windows Agent on GUNN | 2026-10-22 |
 | [TASK-012](completed/TASK-012-central-tool-auto-approve.md) | Centralize Auto Approve for all MCP tools and add project policy/skill | 2026-10-21 |

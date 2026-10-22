@@ -8,6 +8,7 @@ import type { AgentRequest, AgentToGateway, GatewayToAgent } from "../shared/pro
 import { getNomsodVersion } from "../shared/version.js";
 import { AgentWorkerManager } from "./worker-manager.js";
 import { JobManager } from "./job-manager.js";
+import { ConnectionLiveness, ReconnectScheduler } from "./connection-recovery.js";
 import {
   hasConnectedPrimaryGateway,
   isFallbackGatewayUrl,
@@ -49,7 +50,8 @@ const sockets = new Set<WebSocket>();
 const socketByGatewayUrl = new Map<string, WebSocket>();
 const hubIdByGatewayUrl = new Map<string, string>();
 const discoveredPeerUrls = new Set<string>();
-const reconnectAttempts = new Map<string, number>();
+let reconnectScheduler: ReconnectScheduler | undefined;
+const livenessBySocket = new WeakMap<WebSocket, ConnectionLiveness>();
 const connectingGateways = new Set<string>();
 let peerDiscoveryTimer: NodeJS.Timeout | undefined;
 let fallbackGatewayTimer: NodeJS.Timeout | undefined;
@@ -206,12 +208,6 @@ async function probeNomsodPeerGateway(gatewayUrl: string): Promise<boolean> {
     req.on("error", () => resolve(false));
   });
 }
-function backoffMs(attempt: number): number {
-  const base = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
-  const jitter = Math.floor(Math.random() * Math.max(250, base * 0.25));
-  return base + jitter;
-}
-
 const workerManager = new AgentWorkerManager(
   root,
   workerPorts,
@@ -471,7 +467,8 @@ async function run(): Promise<void> {
   }
 
   const connect = (gatewayUrl: string) => {
-    if (stopping || connectingGateways.has(gatewayUrl) || connectedGateways.has(gatewayUrl)) return;
+    if (stopping || !gatewayUrls.has(gatewayUrl) || reconnectScheduler?.hasPending(gatewayUrl)
+      || connectingGateways.has(gatewayUrl) || connectedGateways.has(gatewayUrl)) return;
     if (isFallbackGatewayUrl(gatewayUrl) && shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) return;
     connectingGateways.add(gatewayUrl);
 
@@ -483,7 +480,8 @@ async function run(): Promise<void> {
     sockets.add(ws);
     socketByGatewayUrl.set(gatewayUrl, ws);
 
-    let lastInbound = Date.now();
+    const liveness = new ConnectionLiveness(staleMs);
+    livenessBySocket.set(ws, liveness);
     let heartbeatTimer: NodeJS.Timeout | undefined;
     let staleTimer: NodeJS.Timeout | undefined;
 
@@ -498,8 +496,7 @@ async function run(): Promise<void> {
 
     ws.on("open", () => {
       connectedGateways.delete(gatewayUrl);
-      reconnectAttempts.set(gatewayUrl, 0);
-      lastInbound = Date.now();
+      liveness.received();
 
       // Enable TCP keep-alive on the underlying socket (10s probe interval)
       const netSocket = (ws as any)._socket;
@@ -520,7 +517,7 @@ async function run(): Promise<void> {
       );
 
       staleTimer = setInterval(() => {
-        if (Date.now() - lastInbound > staleMs) {
+        if (liveness.isStale()) {
           console.warn(`[agent-guardian] gateway stale ${gatewayUrl}; forcing reconnect`);
           ws.terminate();
         }
@@ -528,7 +525,7 @@ async function run(): Promise<void> {
     });
 
     ws.on("message", async raw => {
-      lastInbound = Date.now();
+      liveness.received();
 
       let message: GatewayToAgent;
       try {
@@ -551,7 +548,7 @@ async function run(): Promise<void> {
         if (message.hubId) {
           hubIdByGatewayUrl.set(gatewayUrl, message.hubId);
         }
-        reconnectAttempts.set(gatewayUrl, 0);
+        reconnectScheduler?.reset(gatewayUrl);
         console.log(`[agent-guardian] connected and ready: ${gatewayUrl}${message.hubId ? ` (hub=${message.hubId})` : ""}`);
 
         if (!isFallbackGatewayUrl(gatewayUrl)) {
@@ -587,9 +584,11 @@ async function run(): Promise<void> {
     });
 
     ws.on("ping", data => {
-      lastInbound = Date.now();
+      liveness.received();
       try { ws.pong(data); } catch {}
     });
+
+    ws.on("pong", () => liveness.received());
 
     ws.on("error", error => {
       console.warn(`[agent-guardian] websocket error ${gatewayUrl}:`, error.message);
@@ -602,25 +601,26 @@ async function run(): Promise<void> {
       sockets.delete(ws);
       if (socketByGatewayUrl.get(gatewayUrl) === ws) socketByGatewayUrl.delete(gatewayUrl);
       cleanupTimers();
-      if (stopping) return;
+      if (stopping || !gatewayUrls.has(gatewayUrl)) return;
 
       scheduleFallbackConnections(250);
 
       if (isFallbackGatewayUrl(gatewayUrl) && shouldParkFallbackGateway(gatewayUrl, connectedGateways, hubIdByGatewayUrl)) {
-        reconnectAttempts.set(gatewayUrl, 0);
+        reconnectScheduler?.reset(gatewayUrl);
         console.log(`[agent-guardian] fallback gateway parked: ${gatewayUrl}`);
         return;
       }
 
-      const attempt = reconnectAttempts.get(gatewayUrl) || 0;
-      const delay = backoffMs(attempt);
-      reconnectAttempts.set(gatewayUrl, attempt + 1);
-      console.warn(
-        `[agent-guardian] disconnected ${gatewayUrl} code=${code} reason=${reason.toString() || "-"}; reconnect in ${delay}ms`
-      );
-      setTimeout(() => connect(gatewayUrl), delay);
+      const delay = reconnectScheduler?.schedule(gatewayUrl);
+      if (delay !== undefined) {
+        console.warn(
+          `[agent-guardian] disconnected ${gatewayUrl} code=${code} reason=${reason.toString() || "-"}; reconnect in ${delay}ms`
+        );
+      }
     });
   };
+
+  reconnectScheduler = new ReconnectScheduler(connect);
 
   const discoverAndConnectPeers = async () => {
     const livePeerUrls = new Set(discoverTailscaleGatewayUrls());
@@ -630,7 +630,7 @@ async function run(): Promise<void> {
       if (!livePeerUrls.has(peerUrl)) {
         discoveredPeerUrls.delete(peerUrl);
         gatewayUrls.delete(peerUrl);
-        reconnectAttempts.delete(peerUrl);
+        reconnectScheduler?.reset(peerUrl);
         const ws = socketByGatewayUrl.get(peerUrl);
         if (ws) {
           console.log(`[agent-guardian] peer went offline on Tailscale; closing socket: ${peerUrl}`);
@@ -662,15 +662,18 @@ async function run(): Promise<void> {
     const drift = now - lastTick - sleepCheckIntervalMs;
     lastTick = now;
     if (drift > 5_000) {
-      console.warn(`[agent-guardian] detected system sleep/wake pause (${drift}ms); resetting retry backoffs and verifying connections`);
-      reconnectAttempts.clear();
+      console.warn(`[agent-guardian] detected event-loop pause (${drift}ms); allowing heartbeat recovery and reconnecting unavailable gateways`);
+      reconnectScheduler?.clear();
       for (const [url, ws] of socketByGatewayUrl) {
         if (ws.readyState === WebSocket.OPEN) {
+          livenessBySocket.get(ws)?.resume(now);
           try { ws.ping(); } catch {}
+          try { ws.send(JSON.stringify({ type: "heartbeat", at: now })); } catch {}
         } else {
           try { ws.terminate(); } catch {}
         }
       }
+      for (const url of gatewayUrls) connect(url);
       scheduleFallbackConnections(100);
     }
   }, sleepCheckIntervalMs);
@@ -698,6 +701,7 @@ async function shutdown(): Promise<void> {
   if (sleepDetectorTimer) clearInterval(sleepDetectorTimer);
   if (peerDiscoveryTimer) clearInterval(peerDiscoveryTimer);
   if (fallbackGatewayTimer) clearTimeout(fallbackGatewayTimer);
+  reconnectScheduler?.clear();
 
   for (const ws of sockets) {
     try { ws.close(1001, "agent shutdown"); } catch {}
