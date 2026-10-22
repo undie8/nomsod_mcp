@@ -51,6 +51,11 @@ if ((Test-Path $portableNode) -and (Test-Path $portableNpm)) {
     $Npm = $portableNpm
   }
 }
+
+$nodeDir = Split-Path $Node -Parent
+if ($env:PATH -notlike "*$nodeDir*") {
+  $env:PATH = "$nodeDir;$env:PATH"
+}
 $CurrentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $CurrentSid = $CurrentIdentity.User.Value
 $Quote = [char]34
