@@ -3,7 +3,6 @@
 ## ⏳ In Progress
 | ID | Title | Owner | Target |
 |---|---|---|---|
-| [TASK-20261023-release-0-4-25](in-progress/TASK-20261023-release-0-4-25.md) | Publish and deploy dependency hardening 0.4.25 | Codex | Mac/UNDIE/GUNN |
 
 ## 📋 Planned
 | ID | Title | Priority |
@@ -12,6 +11,7 @@
 ## ✅ Completed
 | ID | Title | Completed Date |
 |---|---|---|
+| [TASK-20261023-release-0-4-25](completed/TASK-20261023-release-0-4-25.md) | Publish and deploy dependency hardening 0.4.25 | 2026-10-23 |
 | [TASK-20261023-dependency-hardening](completed/TASK-20261023-dependency-hardening.md) | Clear dependency advisories and verify Mac/UNDIE candidates | 2026-10-23 |
 | [TASK-017](completed/TASK-017-release-0-4-24.md) | Publish and deploy Nomsod MCP 0.4.24 | 2026-10-23 |
 | [TASK-016](completed/TASK-016-mac-power-reconnect.md) | Mac AC-only availability and reconnect recovery | 2026-10-23 |

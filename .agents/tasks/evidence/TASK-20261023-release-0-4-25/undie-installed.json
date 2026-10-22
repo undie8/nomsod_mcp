@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-22T19:19:56.016Z",
+  "platform": "win32",
+  "node": "v24.13.0",
+  "version": "0.4.25",
+  "sdk": "2.3.1",
+  "active": {
+    "id": "20261022191739-f5d926ff",
+    "port": 34103,
+    "pid": 17296,
+    "createdAt": "2026-10-22T19:17:39.573Z",
+    "inFlight": 0,
+    "draining": false,
+    "alive": true
+  },
+  "activeHashes": {
+    "dist/gateway/mcp.js": "ef48e348cc510eeaf2fec69b30561f594f9a6d8ccb037ab507b9e0af8750bb31",
+    "dist/gateway/main.js": "c74011163b173532915bebfe5d95aedc6da31dd86fb5870f00cda039577edecb"
+  },
+  "rollbackAvailable": true,
+  "authRejections": [
+    401,
+    401
+  ],
+  "toolCount": 43,
+  "devices": [
+    {
+      "hostname": "mac",
+      "version": "0.4.25",
+      "system": true,
+      "files": true,
+      "shell": true,
+      "elementLimit": true,
+      "bodyLimit": "413",
+      "subsequentRequest": true
+    },
+    {
+      "hostname": "Undie",
+      "version": "0.4.25",
+      "system": true,
+      "files": true,
+      "shell": true,
+      "elementLimit": true,
+      "bodyLimit": "413",
+      "subsequentRequest": true
+    }
+  ],
+  "audit": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  }
+}

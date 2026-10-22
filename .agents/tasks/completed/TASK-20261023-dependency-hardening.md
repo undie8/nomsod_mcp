@@ -53,3 +53,4 @@
 - All eight dependency warnings removed in the implementation and native candidates. Normal Mac/UNDIE file/system/shell flows verified through patched gateways on both operating systems. Existing Mac desktop test limitations remain explicitly out of scope.
 - Changes remain uncommitted on main for review. No patch version bump, push, production service replacement or public artifact promotion performed in this task. Version 0.4.24 immutable artifacts remain intact; publishing requires a later terminal menu selection.
 - Skills used: tdd-slice, diagnose-loop, nomsod-tool-approval, remote-computer, repo-task-tracker and prevent-encoding-mojibake (with skill-router execution contract). No skill changes needed.
+- Follow-up: user selected patch+push+deploy; release and production verification completed in [TASK-20261023-release-0-4-25](TASK-20261023-release-0-4-25.md).
