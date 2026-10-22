@@ -8,6 +8,7 @@ import { resolveClusterId } from "./single-cluster.js";
 export interface StoredIdentity {
   deviceId: string;
   deviceToken?: string;
+  displayName?: string;
 }
 
 export function identityPath(): string {
@@ -17,11 +18,22 @@ export function identityPath(): string {
 
 export async function loadIdentity(): Promise<StoredIdentity> {
   const file = identityPath();
+  const hostname = os.hostname();
+  const displayName = (process.env.NOMSOD_DEVICE_NAME || hostname).trim() || hostname;
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8")) as StoredIdentity;
-    if (typeof parsed.deviceId === "string" && parsed.deviceId.length > 0) return parsed;
+    if (typeof parsed.deviceId === "string" && parsed.deviceId.length > 0) {
+      if (parsed.displayName !== displayName) {
+        parsed.displayName = displayName;
+        await saveIdentity(parsed);
+      }
+      return parsed;
+    }
   } catch {}
-  const identity: StoredIdentity = { deviceId: "device_" + randomUUID() };
+  const identity: StoredIdentity = {
+    deviceId: "device_" + randomUUID(),
+    displayName
+  };
   await saveIdentity(identity);
   return identity;
 }

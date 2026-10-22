@@ -201,7 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let connected = boolValue(agentJson, key: "gatewayConnected")
 
         let identity = readIdentity()
-        let displayName = stringValue(identity, key: "displayName") ?? Host.current().localizedName ?? "Mac"
+        let displayName = stringValue(identity, key: "displayName") ?? env["NOMSOD_DEVICE_NAME"] ?? Host.current().localizedName ?? "Mac"
         let deviceId = stringValue(identity, key: "deviceId") ?? "(not paired)"
 
         let state: NomsodState
@@ -327,14 +327,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showInfo() {
         refreshStatus()
         let identity = readIdentity()
-        let name = stringValue(identity, key: "displayName") ?? "(not paired)"
         let id = stringValue(identity, key: "deviceId") ?? "(not paired)"
+        let isPaired = id != "(not paired)" && !id.isEmpty
+        let name = stringValue(identity, key: "displayName") ?? env["NOMSOD_DEVICE_NAME"] ?? Host.current().localizedName ?? "Mac"
 
         let alert = NSAlert()
         alert.messageText = "Nomsod MCP v\(appVersion())"
         alert.informativeText = """
         Computer: \(Host.current().localizedName ?? "Mac")
-        Device name: \(name)
+        Device name: \(isPaired ? name : "(not paired)")
         Device ID: \(id)
         Platform: macOS
         Gateway: \(env["NOMSOD_GATEWAY_WS"] ?? "(not configured)")

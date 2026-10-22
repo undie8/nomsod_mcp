@@ -160,7 +160,7 @@ namespace NomsodMcpControl
                 string identityJson = File.Exists(identityPath) ? SafeReadAllText(identityPath) : "";
                 string displayName = JsonString(identityJson, "displayName");
                 string deviceId = JsonString(identityJson, "deviceId");
-                if (String.IsNullOrWhiteSpace(displayName)) displayName = Environment.MachineName;
+                if (String.IsNullOrWhiteSpace(displayName)) displayName = GetEnv("NOMSOD_DEVICE_NAME", Environment.MachineName);
                 if (String.IsNullOrWhiteSpace(deviceId)) deviceId = "(not paired)";
 
                 statusItem.Text = gatewayConnected ? "Status: Online" : guardianOk ? "Status: Agent running / Gateway offline" : "Status: Offline";
@@ -186,11 +186,16 @@ namespace NomsodMcpControl
             RefreshStatus();
             string identityPath = GetIdentityPath();
             string identityJson = File.Exists(identityPath) ? SafeReadAllText(identityPath) : "";
+            string deviceId = JsonString(identityJson, "deviceId");
+            bool isPaired = !String.IsNullOrWhiteSpace(deviceId);
+            string displayName = JsonString(identityJson, "displayName");
+            if (String.IsNullOrWhiteSpace(displayName)) displayName = GetEnv("NOMSOD_DEVICE_NAME", Environment.MachineName);
+
             string msg =
                 "Nomsod MCP v" + GetVersion() + "\r\n\r\n" +
                 "Computer: " + Environment.MachineName + "\r\n" +
-                "Device name: " + ValueOr(JsonString(identityJson, "displayName"), "(not paired)") + "\r\n" +
-                "Device ID: " + ValueOr(JsonString(identityJson, "deviceId"), "(not paired)") + "\r\n" +
+                "Device name: " + (isPaired ? displayName : "(not paired)") + "\r\n" +
+                "Device ID: " + ValueOr(deviceId, "(not paired)") + "\r\n" +
                 "Platform: Windows\r\n" +
                 "Gateway: " + GetEnv("NOMSOD_GATEWAY_WS", "(not configured)") + "\r\n" +
                 "MCP: " + GetPublicMcpUrl() + "\r\n" +
