@@ -3,6 +3,8 @@ import { z } from "zod";
 import { getNomsodVersion } from "../shared/version.js";
 import type { ComputerHub } from "./hub-client.js";
 
+export const MCP_MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024;
+
 const oauthSecuritySchemes = [
   { type: "oauth2", scopes: ["mcp"] }
 ];
@@ -113,6 +115,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
       { name: "nomsod-mcp", version },
       {
         capabilities: { tools: {} },
+        maxToolInputElements: 10_000,
         instructions:
           "Use list_computers before machine-specific work unless the target deviceId is already known and fresh. Preserve UTF-8 and prefer hash-guarded patch_text_file for existing text files."
       }
@@ -1048,6 +1051,7 @@ export function createNomsodMcpHandler(hub: ComputerHub, options?: NomsodMcpHand
     return server;
   }, {
     legacy: "stateless",
+    maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES,
     onerror: error => console.error("[mcp] handler error:", error)
   });
 }

@@ -1,0 +1,8 @@
+{
+  "platform": "win32",
+  "node": "v24.13.0",
+  "total": 77,
+  "passed": 77,
+  "failed": 0,
+  "skipped": 0
+}

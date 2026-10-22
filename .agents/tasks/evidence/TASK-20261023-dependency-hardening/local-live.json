@@ -1,0 +1,75 @@
+{
+  "at": "2026-10-22T18:52:48.418Z",
+  "platform": "win32",
+  "node": "v24.13.0",
+  "sdk": "2.3.1",
+  "toolCount": 43,
+  "devices": [
+    {
+      "hostname": "mac",
+      "platform": "darwin",
+      "version": "0.4.24",
+      "system": true,
+      "files": true,
+      "shell": true,
+      "invalidInput": true,
+      "elementLimit": true,
+      "bodyLimit": true,
+      "recovered": true,
+      "runtime": {
+        "guardianPid": 12588,
+        "active": {
+          "id": "20261022181527-d8deb9ec",
+          "port": 34120,
+          "pid": 12659,
+          "createdAt": "2026-10-22T18:15:27.355Z",
+          "inFlight": 0,
+          "draining": false,
+          "alive": true
+        },
+        "draining": [],
+        "operationInProgress": false
+      }
+    },
+    {
+      "hostname": "Undie",
+      "platform": "win32",
+      "version": "0.4.24",
+      "system": true,
+      "files": true,
+      "shell": true,
+      "invalidInput": true,
+      "elementLimit": true,
+      "bodyLimit": true,
+      "recovered": true,
+      "runtime": {
+        "guardianPid": 7040,
+        "active": {
+          "id": "20261022021442-b7e921b6",
+          "port": 34120,
+          "pid": 24756,
+          "createdAt": "2026-10-22T02:14:42.204Z",
+          "inFlight": 0,
+          "draining": false,
+          "alive": true
+        },
+        "draining": [],
+        "operationInProgress": false
+      }
+    }
+  ],
+  "supervisor": {
+    "supervisorPid": 12172,
+    "active": {
+      "id": "20261021205019-b7a5a1c7",
+      "port": 34101,
+      "pid": 32492,
+      "createdAt": "2026-10-21T20:50:19.385Z",
+      "inFlight": 0,
+      "draining": false,
+      "alive": true
+    },
+    "draining": [],
+    "reloadInProgress": false
+  }
+}

@@ -196,6 +196,8 @@ The owner key is used only on the authorization approval page; it is not accepte
 
 A new computer uses the pairing token only for first registration. It then receives its own persistent device token.
 
+MCP HTTP request bodies are limited to 2 MiB of UTF-8 bytes, including the JSON envelope. Tool arguments are limited to 10,000 array elements and object keys in total, including nested values. Oversized bodies return HTTP 413 and close the connection; a client still uploading may instead observe a connection reset. Excessive argument elements return an MCP tool error without dispatching the action. File-write content must fit within the request limit; file-read responses are not capped by this input limit.
+
 ## Configuration
 
 Copy the template and configure it before production installation:

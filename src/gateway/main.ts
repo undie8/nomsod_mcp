@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { RemoteComputerHub } from "./hub-client.js";
 import { getNomsodVersion } from "../shared/version.js";
-import { createNomsodMcpHandler } from "./mcp.js";
+import { createNomsodMcpHandler, MCP_MAX_REQUEST_BODY_BYTES } from "./mcp.js";
 
 const host = "127.0.0.1";
 const port = Number(process.env.NOMSOD_INTERNAL_PORT || 3220);
@@ -19,6 +19,7 @@ if (!controlKey) {
 const hub = new RemoteComputerHub(controlBase, controlKey);
 const mcp = createNomsodMcpHandler(hub);
 const mcpNodeHandler = toNodeHandler(mcp, {
+  maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES,
   onerror: error => console.error("[runtime] MCP adapter error:", error)
 });
 

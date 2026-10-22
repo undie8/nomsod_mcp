@@ -1,0 +1,8 @@
+{
+  "platform": "darwin",
+  "node": "v24.13.0",
+  "total": 77,
+  "passed": 74,
+  "failed": 0,
+  "skipped": 3
+}
